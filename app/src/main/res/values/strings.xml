@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AI_Assis</string>
+    <string name="notification_listener_description">Reads notifications to generate AI reply suggestions.</string>
+</resources>
