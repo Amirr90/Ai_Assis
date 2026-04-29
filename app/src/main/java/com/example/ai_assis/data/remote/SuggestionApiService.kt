@@ -11,15 +11,20 @@ import io.ktor.client.call.body
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.isSuccess
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import javax.inject.Inject
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 class SuggestionApiService @Inject constructor(
     private val httpClient: HttpClient,
 ) {
+    private val json = Json { ignoreUnknownKeys = true }
+
     suspend fun generateSuggestions(request: SuggestionGenerateRequestDto): SuggestionGenerateResponseDto {
         Log.d(logTag, "Gemini request start. hasApiKey=${BuildConfig.GEMINI_BACKEND_API_KEY.isNotBlank()}")
         val prompt = buildPrompt(request)
@@ -53,7 +58,8 @@ class SuggestionApiService @Inject constructor(
     }
 
     private suspend fun callGemini(prompt: String): GeminiGenerateResponseDto {
-        return httpClient.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent") {
+        val model = BuildConfig.GEMINI_MODEL.ifBlank { "gemini-2.0-flash" }
+        val response = httpClient.post("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent") {
             contentType(ContentType.Application.Json)
             parameter("key", BuildConfig.GEMINI_BACKEND_API_KEY)
             setBody(
@@ -75,7 +81,32 @@ class SuggestionApiService @Inject constructor(
                     ),
                 ),
             )
-        }.body()
+        }
+
+        val status = response.status
+        val rawBody = response.bodyAsText()
+        Log.d(
+            logTag,
+            "Gemini model=$model HTTP status=${status.value} bodyPreview=${rawBody.take(500)}",
+        )
+
+        if (!status.isSuccess()) {
+            Log.e(logTag, "Gemini request failed. model=$model status=${status.value}")
+            return GeminiGenerateResponseDto()
+        }
+
+        val parsed = runCatching { json.decodeFromString<GeminiGenerateResponseDto>(rawBody) }
+            .getOrElse { error ->
+                Log.e(logTag, "Gemini decode failure: ${error.message}")
+                GeminiGenerateResponseDto()
+            }
+
+        if (parsed.candidates.isEmpty()) {
+            val blocked = parsed.promptFeedback?.blockReason ?: "none"
+            Log.w(logTag, "Gemini candidates empty. blockReason=$blocked")
+        }
+
+        return parsed
     }
 
     private fun buildPrompt(request: SuggestionGenerateRequestDto): String {
@@ -200,6 +231,8 @@ private data class GeminiGenerationConfigDto(
 @Serializable
 private data class GeminiGenerateResponseDto(
     val candidates: List<GeminiCandidateDto> = emptyList(),
+    @SerialName("promptFeedback")
+    val promptFeedback: GeminiPromptFeedbackDto? = null,
 )
 
 @Serializable
@@ -207,4 +240,10 @@ private data class GeminiCandidateDto(
     val content: GeminiContentDto = GeminiContentDto(parts = emptyList()),
     @SerialName("finishReason")
     val finishReason: String? = null,
+)
+
+@Serializable
+private data class GeminiPromptFeedbackDto(
+    @SerialName("blockReason")
+    val blockReason: String? = null,
 )

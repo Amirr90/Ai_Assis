@@ -42,6 +42,7 @@ import com.example.ai_assis.domain.repository.SmartSuggestionRepository
 import com.example.ai_assis.domain.usecase.BuildConversationContextUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
 import com.example.ai_assis.presentation.ui.overlay.BubbleContent
+import com.example.ai_assis.presentation.ui.overlay.OverlayUiState
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -140,6 +141,7 @@ class OverlayService : android.app.Service() {
                         "Suggestion source=${hybridResult.source} count=${replies.size} fallback=${hybridResult.fallbackReason}",
                     )
                     if (replies.isNotEmpty()) {
+                        NotificationEventBus.clearFailure()
                         NotificationEventBus.addSuggestion(
                             message = event,
                             replies = replies,
@@ -157,7 +159,8 @@ class OverlayService : android.app.Service() {
                         Log.d(logTag, "AI pipeline cancelled for ${event.appSource}; likely superseded by a newer event.")
                         return@onFailure
                     }
-                    val errorMsg = throwable.message ?: "Failed to generate reply"
+                    NotificationEventBus.recordFailure(event)
+                    val errorMsg = userFriendlyError(throwable.message)
                     NotificationEventBus.setError(errorMsg)
                     Log.e(logTag, "AI call failed for ${event.appSource}: $errorMsg", throwable)
                 }
@@ -195,13 +198,15 @@ class OverlayService : android.app.Service() {
                 val meta by NotificationEventBus.metaState.collectAsState()
                 val items by NotificationEventBus.chatHistory.collectAsState()
                 BubbleContent(
-                    mode = meta.mode,
-                    unreadCount = meta.unreadCount,
-                    updatesPaused = meta.updatesPaused,
-                    isLoading = meta.isLoading,
-                    errorMessage = meta.errorMessage,
-                    isBubbleVisible = meta.isBubbleVisible,
-                    items = items,
+                    uiState = OverlayUiState(
+                        mode = meta.mode,
+                        unreadCount = meta.unreadCount,
+                        updatesPaused = meta.updatesPaused,
+                        isLoading = meta.isLoading,
+                        errorMessage = meta.errorMessage,
+                        isBubbleVisible = meta.isBubbleVisible,
+                        items = items,
+                    ),
                     onHeadClick = {
                         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
                         renderOverlay()
@@ -220,6 +225,7 @@ class OverlayService : android.app.Service() {
                     onToggleUpdates = { NotificationEventBus.togglePaused() },
                     onReplyClick = ::copyToClipboard,
                     onDirectSend = ::sendDirectReply,
+                    onRetry = { NotificationEventBus.retryLastFailedRequest() },
                 )
             }
         }
@@ -410,6 +416,19 @@ class OverlayService : android.app.Service() {
         const val logTag = "SmartAssistant"
         const val overlayChannelId = "overlay_service_channel"
         const val overlayNotificationId = 101
+    }
+
+    private fun userFriendlyError(rawMessage: String?): String {
+        val message = rawMessage.orEmpty().lowercase()
+        return when {
+            message.contains("quota") || message.contains("rate") || message.contains("429") ->
+                "Cloud provider is rate-limited right now. Retrying will use fallback logic automatically."
+            message.contains("cloud_error_both_providers_cooldown") ->
+                "Cloud providers are cooling down. On-device suggestions remain available."
+            message.contains("cloud_error_both_providers") ->
+                "Cloud providers are unavailable. On-device suggestions remain available."
+            else -> rawMessage ?: "Unable to generate suggestions right now."
+        }
     }
 
     private fun clearScrim() {

@@ -43,6 +43,11 @@ android {
             "GEMINI_BACKEND_API_KEY",
             "\"${localProperties.getProperty("GEMINI_BACKEND_API_KEY", "")}\""
         )
+        buildConfigField(
+            "String",
+            "GEMINI_MODEL",
+            "\"${localProperties.getProperty("GEMINI_MODEL", "gemini-2.0-flash")}\""
+        )
     }
 
     buildTypes {

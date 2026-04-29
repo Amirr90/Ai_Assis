@@ -1,8 +1,13 @@
 package com.example.ai_assis.presentation.ui.screen
 
+import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import android.app.RemoteInput
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -23,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -62,7 +68,9 @@ import com.example.ai_assis.presentation.ui.components.SourceTabsRow
 import com.example.ai_assis.presentation.ui.components.appIconResFor
 import com.example.ai_assis.presentation.ui.components.defaultSourceTabs
 import com.example.ai_assis.presentation.ui.components.sourceTabFromKey
+import com.example.ai_assis.presentation.viewmodel.DashboardEvent
 import com.example.ai_assis.presentation.viewmodel.HomeViewModel
+import com.example.ai_assis.service.DirectReplyRegistry
 import com.example.ai_assis.service.NotificationEventBus
 import com.example.ai_assis.util.PRIVACY_POLICY_URL
 import com.example.ai_assis.util.PermissionUtils
@@ -79,9 +87,10 @@ fun HomeScreen(
     onOpenSuggestions: () -> Unit,
     onOpenImeSettings: () -> Unit,
 ) {
-    val selectedTone by viewModel.selectedTone.collectAsState()
-    val chatHistory by viewModel.chatHistory.collectAsState()
-    val overlayMeta by viewModel.overlayMeta.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+    val selectedTone = uiState.selectedTone
+    val chatHistory = uiState.chatHistory
+    val overlayMeta = uiState.overlayMeta
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -137,7 +146,10 @@ fun HomeScreen(
         }
 
         item {
-            ToneSelectorCard(selectedTone = selectedTone, onToneSelected = viewModel::saveTone)
+            ToneSelectorCard(
+                selectedTone = selectedTone,
+                onToneSelected = { viewModel.onEvent(DashboardEvent.ToneSelected(it)) },
+            )
         }
 
         item {
@@ -181,7 +193,7 @@ fun HomeScreen(
             ) {
                 Text("Chat Window", style = MaterialTheme.typography.titleLarge)
                 if (chatHistory.isNotEmpty()) {
-                    IconButton(onClick = viewModel::clearHistory) {
+                    IconButton(onClick = { viewModel.onEvent(DashboardEvent.ClearHistoryClicked) }) {
                         Icon(
                             Icons.Default.Delete,
                             contentDescription = "Clear history",
@@ -207,19 +219,47 @@ fun HomeScreen(
 
         if (filteredHistory.isEmpty()) {
             item {
-                Text(
-                    text = if (selectedSourceTab == SourceTab.All) {
-                        "No suggestions yet. Enable the assistant, then receive a new message from a monitored app."
-                    } else {
-                        "No suggestions yet for ${selectedSourceTab.title}."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (overlayMeta.errorMessage != null) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(8.dp))
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = overlayMeta.errorMessage,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        Text(
+                            text = "Retry last request",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { NotificationEventBus.retryLastFailedRequest() },
+                        )
+                    }
+                } else {
+                    Text(
+                        text = if (overlayMeta.isLoading) {
+                            "Generating suggestions..."
+                        } else if (selectedSourceTab == SourceTab.All) {
+                            "No suggestions yet. Enable the assistant, then receive a new message from a monitored app."
+                        } else {
+                            "No suggestions yet for ${selectedSourceTab.title}."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         } else {
             items(filteredHistory, key = { it.createdAtMs }) { item ->
-                MessageSuggestionCard(item = item)
+                MessageSuggestionCard(
+                    item = item,
+                    onReplyClick = { reply -> copyReply(context, reply) },
+                    onSendReply = { reply, actionKey -> sendDirectReply(context, reply, actionKey) },
+                )
             }
         }
     }
@@ -364,8 +404,11 @@ private fun ToneSelectorCard(selectedTone: ReplyTone, onToneSelected: (ReplyTone
 }
 
 @Composable
-private fun MessageSuggestionCard(item: NotificationEventBus.ChatSuggestionItem) {
-    val context = LocalContext.current
+private fun MessageSuggestionCard(
+    item: NotificationEventBus.ChatSuggestionItem,
+    onReplyClick: (String) -> Unit,
+    onSendReply: (String, String?) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -402,25 +445,56 @@ private fun MessageSuggestionCard(item: NotificationEventBus.ChatSuggestionItem)
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
+        Text(
+            text = "Source: ${item.source.name}${item.fallbackReason?.let { " ? ${toFallbackLabel(it)}" } ?: ""}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Spacer(Modifier.height(2.dp))
         item.replies.forEach { reply ->
-            TextButton(
-                onClick = { copyReply(context, reply) },
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                        RoundedCornerShape(10.dp),
-                    ),
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                    .padding(start = 4.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = reply,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                TextButton(
+                    onClick = { onReplyClick(reply) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = reply,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                TextButton(onClick = { onSendReply(reply, item.chatMessage.replyActionKey) }) {
+                    Text("Send")
+                }
             }
         }
+    }
+}
+
+private fun toFallbackLabel(rawReason: String): String {
+    return when (rawReason) {
+        "cached" -> "cached cloud response"
+        "circuit_breaker_open" -> "cloud cooldown active"
+        "cloud_timeout" -> "cloud timeout"
+        "cloud_providers_cooldown" -> "cloud providers cooling down"
+        "cloud_rate_limited" -> "cloud rate-limited"
+        "cloud_empty" -> "cloud returned empty result"
+        "cloud_error_both_providers" -> "all cloud providers failed"
+        "cloud_error" -> "cloud request failed"
+        "high_quality_mode" -> "high quality mode"
+        "insufficient_count" -> "on-device count below threshold"
+        "length_over_limit" -> "on-device reply too long"
+        "blocked_content" -> "safety filtered"
+        "low_confidence" -> "on-device confidence too low"
+        "language_mismatch" -> "language mismatch"
+        else -> rawReason.replace('_', ' ')
     }
 }
 
@@ -428,4 +502,36 @@ private fun copyReply(context: Context, reply: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboard.setPrimaryClip(ClipData.newPlainText("reply", reply))
     Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+}
+
+private fun sendDirectReply(context: Context, reply: String, actionKey: String?) {
+    if (actionKey == null) {
+        copyReply(context, reply)
+        return
+    }
+    val action = DirectReplyRegistry.get(actionKey)
+    if (action == null) {
+        copyReply(context, reply)
+        return
+    }
+    val remoteInput = action.remoteInputs?.firstOrNull()
+    if (remoteInput == null) {
+        copyReply(context, reply)
+        return
+    }
+    try {
+        val intent = Intent()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            RemoteInput.addResultsToIntent(
+                arrayOf(remoteInput),
+                intent,
+                Bundle().apply { putCharSequence(remoteInput.resultKey, reply) },
+            )
+        }
+        action.actionIntent.send(context, 0, intent)
+        Toast.makeText(context, "Reply sent!", Toast.LENGTH_SHORT).show()
+        DirectReplyRegistry.remove(actionKey)
+    } catch (_: PendingIntent.CanceledException) {
+        copyReply(context, reply)
+    }
 }

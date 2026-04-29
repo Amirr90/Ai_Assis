@@ -25,6 +25,8 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
     private val suggestionApiService: SuggestionApiService,
     private val suggestionMapper: SuggestionMapper,
 ) : SmartSuggestionRepository {
+    private val providerBlockedUntilMs = mutableMapOf<CloudProvider, Long>()
+
     override suspend fun getOnDeviceSuggestions(context: ConversationContext): Result<List<Suggestion>> {
         return runCatching { onDeviceSuggestionGenerator.generate(context) }
     }
@@ -36,18 +38,47 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
             recentMessages = recentMessages,
             latestMessage = context.latestMessage,
         )
-        val primaryProvider = configuredProvider()
-        Log.d(
-            logTag,
-            "Cloud provider selected=$primaryProvider",
-        )
+        val orderedProviders = orderedProviders()
+        Log.d(logTag, "Cloud providers order=$orderedProviders")
 
-        return fetchCloudSuggestions(
-            provider = primaryProvider,
-            context = context,
-            recentMessages = recentMessages,
-            compiledConversationContext = compiledConversationContext,
-        )
+        var lastError: Throwable? = null
+        var anyAttempted = false
+        orderedProviders.forEach { provider ->
+            if (isProviderOnCooldown(provider)) {
+                Log.d(logTag, "Cloud provider skipped (cooldown) provider=$provider")
+                return@forEach
+            }
+            anyAttempted = true
+            Log.d(logTag, "Cloud provider attempt provider=$provider")
+            val result = fetchCloudSuggestions(
+                provider = provider,
+                context = context,
+                recentMessages = recentMessages,
+                compiledConversationContext = compiledConversationContext,
+            )
+            result.onSuccess { suggestions ->
+                if (suggestions.isNotEmpty()) {
+                    clearCooldown(provider)
+                    Log.d(logTag, "Cloud provider success provider=$provider count=${suggestions.size}")
+                    return Result.success(suggestions.take(3))
+                }
+                Log.d(logTag, "Cloud provider empty provider=$provider")
+            }.onFailure { throwable ->
+                val reason = classifyProviderFailure(throwable)
+                val wrapped = IllegalStateException(
+                    "cloud_error_${provider.name.lowercase()}_$reason",
+                    throwable,
+                )
+                lastError = wrapped
+                registerProviderFailure(provider, wrapped)
+                Log.w(logTag, "Cloud provider failed provider=$provider reason=$reason")
+            }
+        }
+
+        if (!anyAttempted) {
+            return Result.failure(IllegalStateException("cloud_error_both_providers_cooldown"))
+        }
+        return Result.failure(lastError ?: IllegalStateException("cloud_error_both_providers"))
     }
 
     private suspend fun fetchCloudSuggestions(
@@ -104,10 +135,41 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
 
     override fun observeTone(): Flow<SuggestionTone> = tonePreferencesDataStore.observeTone()
 
-    private fun configuredProvider(): CloudProvider {
+    private fun orderedProviders(): List<CloudProvider> {
         return when (BuildConfig.SUGGESTION_PROVIDER.uppercase()) {
-            "OPENAI", "OPEN_AI" -> CloudProvider.OPEN_AI
-            else -> CloudProvider.GEMINI
+            "GEMINI" -> listOf(CloudProvider.GEMINI, CloudProvider.OPEN_AI)
+            else -> listOf(CloudProvider.OPEN_AI, CloudProvider.GEMINI)
+        }
+    }
+
+    private fun registerProviderFailure(provider: CloudProvider, throwable: Throwable) {
+        val now = System.currentTimeMillis()
+        val message = throwable.message.orEmpty().lowercase()
+        val cooldownMs = if (message.contains("quota") || message.contains("rate") || message.contains("429")) {
+            quotaCooldownMs
+        } else {
+            transientCooldownMs
+        }
+        providerBlockedUntilMs[provider] = now + cooldownMs
+        Log.d(logTag, "Cloud provider cooldown provider=$provider cooldownMs=$cooldownMs")
+    }
+
+    private fun isProviderOnCooldown(provider: CloudProvider): Boolean {
+        val until = providerBlockedUntilMs[provider] ?: return false
+        return System.currentTimeMillis() < until
+    }
+
+    private fun clearCooldown(provider: CloudProvider) {
+        providerBlockedUntilMs.remove(provider)
+    }
+
+    private fun classifyProviderFailure(throwable: Throwable): String {
+        val message = throwable.message.orEmpty().lowercase()
+        return when {
+            message.contains("quota") -> "quota"
+            message.contains("rate") || message.contains("429") -> "rate_limit"
+            message.contains("timeout") -> "timeout"
+            else -> "generic"
         }
     }
 }
@@ -145,3 +207,5 @@ private fun SuggestionTone.toReplyTone(): ReplyTone {
 }
 
 private const val logTag = "SmartAssistant"
+private const val transientCooldownMs = 2 * 60 * 1_000L
+private const val quotaCooldownMs = 30 * 60 * 1_000L

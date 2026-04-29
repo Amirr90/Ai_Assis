@@ -9,9 +9,21 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+data class DashboardUiState(
+    val selectedTone: ReplyTone = ReplyTone.CASUAL,
+    val chatHistory: List<NotificationEventBus.ChatSuggestionItem> = emptyList(),
+    val overlayMeta: NotificationEventBus.OverlayMetaState = NotificationEventBus.OverlayMetaState(),
+)
+
+sealed interface DashboardEvent {
+    data class ToneSelected(val tone: ReplyTone) : DashboardEvent
+    data object ClearHistoryClicked : DashboardEvent
+}
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -40,6 +52,29 @@ class HomeViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = NotificationEventBus.OverlayMetaState(),
     )
+
+    val uiState: StateFlow<DashboardUiState> = combine(
+        selectedTone,
+        chatHistory,
+        overlayMeta,
+    ) { tone, history, meta ->
+        DashboardUiState(
+            selectedTone = tone,
+            chatHistory = history,
+            overlayMeta = meta,
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = DashboardUiState(),
+    )
+
+    fun onEvent(event: DashboardEvent) {
+        when (event) {
+            is DashboardEvent.ToneSelected -> saveTone(event.tone)
+            DashboardEvent.ClearHistoryClicked -> clearHistory()
+        }
+    }
 
     fun saveTone(tone: ReplyTone) {
         viewModelScope.launch {

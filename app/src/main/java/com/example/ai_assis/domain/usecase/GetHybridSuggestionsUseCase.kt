@@ -91,7 +91,20 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             },
             onFailure = { throwable ->
                 registerCloudFailure()
-                Result.failure(throwable)
+                val reasonMessage = throwable.message.orEmpty()
+                Result.success(
+                    HybridSuggestionResult(
+                        suggestions = onDeviceSuggestions,
+                        source = SuggestionSource.ON_DEVICE,
+                        fallbackReason = when {
+                            reasonMessage.contains("cloud_error_both_providers_cooldown") -> "cloud_providers_cooldown"
+                            reasonMessage.contains("cloud_error_both_providers") -> "cloud_error_both_providers"
+                            reasonMessage.contains("rate_limit") || reasonMessage.contains("quota") -> "cloud_rate_limited"
+                            reasonMessage.contains("timeout") -> "cloud_timeout"
+                            else -> "cloud_error"
+                        },
+                    ),
+                )
             },
         )
     }

@@ -39,6 +39,7 @@ object NotificationEventBus {
 
     private val _metaState = MutableStateFlow(OverlayMetaState())
     val metaState: StateFlow<OverlayMetaState> = _metaState.asStateFlow()
+    private var lastFailedMessage: ChatMessage? = null
 
     fun tryEmit(message: ChatMessage) {
         _events.tryEmit(message)
@@ -123,7 +124,26 @@ object NotificationEventBus {
     }
 
     fun setError(message: String?) {
-        _metaState.value = _metaState.value.copy(isLoading = false, errorMessage = message)
+        _metaState.value = _metaState.value.copy(
+            isLoading = false,
+            errorMessage = message,
+            isBubbleVisible = message != null || _metaState.value.isBubbleVisible,
+        )
+    }
+
+    fun recordFailure(message: ChatMessage) {
+        lastFailedMessage = message
+    }
+
+    fun clearFailure() {
+        lastFailedMessage = null
+    }
+
+    fun retryLastFailedRequest(): Boolean {
+        val message = lastFailedMessage ?: return false
+        _metaState.value = _metaState.value.copy(isLoading = true, errorMessage = null, isBubbleVisible = true)
+        _events.tryEmit(message)
+        return true
     }
 
     private fun markAllAsRead() {

@@ -41,7 +41,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.animation.core.animateFloatAsState
@@ -56,42 +55,48 @@ import com.example.ai_assis.presentation.ui.components.defaultSourceTabs
 import com.example.ai_assis.presentation.ui.components.sourceTabFromKey
 import com.example.ai_assis.service.NotificationEventBus
 
+data class OverlayUiState(
+    val mode: NotificationEventBus.OverlayMode = NotificationEventBus.OverlayMode.HEAD,
+    val unreadCount: Int = 0,
+    val updatesPaused: Boolean = false,
+    val isLoading: Boolean = false,
+    val errorMessage: String? = null,
+    val isBubbleVisible: Boolean = false,
+    val items: List<NotificationEventBus.ChatSuggestionItem> = emptyList(),
+)
+
 @Composable
 fun BubbleContent(
-    mode: NotificationEventBus.OverlayMode,
-    unreadCount: Int,
-    updatesPaused: Boolean,
-    isLoading: Boolean,
-    errorMessage: String?,
-    isBubbleVisible: Boolean,
-    items: List<NotificationEventBus.ChatSuggestionItem>,
+    uiState: OverlayUiState,
     onHeadClick: () -> Unit,
     onCollapse: () -> Unit,
     onClear: () -> Unit,
     onToggleUpdates: () -> Unit,
     onReplyClick: (String) -> Unit,
     onDirectSend: (String, String) -> Unit,
+    onRetry: () -> Boolean,
 ) {
-    if (!isBubbleVisible) return
+    if (!uiState.isBubbleVisible) return
 
     Box {
-        if (mode == NotificationEventBus.OverlayMode.HEAD) {
+        if (uiState.mode == NotificationEventBus.OverlayMode.HEAD) {
             ChatHeadBubble(
-                unreadCount = unreadCount,
-                isLoading = isLoading,
+                unreadCount = uiState.unreadCount,
+                isLoading = uiState.isLoading,
                 onClick = onHeadClick,
             )
         } else {
             ExpandedChatPanel(
-                items = items,
-                updatesPaused = updatesPaused,
-                isLoading = isLoading,
-                errorMessage = errorMessage,
+                items = uiState.items,
+                updatesPaused = uiState.updatesPaused,
+                isLoading = uiState.isLoading,
+                errorMessage = uiState.errorMessage,
                 onCollapse = onCollapse,
                 onClear = onClear,
                 onToggleUpdates = onToggleUpdates,
                 onReplyClick = onReplyClick,
                 onDirectSend = onDirectSend,
+                onRetry = onRetry,
             )
         }
     }
@@ -153,6 +158,7 @@ private fun ExpandedChatPanel(
     onToggleUpdates: () -> Unit,
     onReplyClick: (String) -> Unit,
     onDirectSend: (String, String) -> Unit,
+    onRetry: () -> Boolean,
 ) {
     val listState = rememberLazyListState()
     var selectedTabKey by rememberSaveable { mutableStateOf(SourceTab.All.key) }
@@ -230,15 +236,25 @@ private fun ExpandedChatPanel(
         }
 
         if (errorMessage != null) {
-            Text(
-                text = errorMessage,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodySmall,
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(8.dp))
                     .padding(8.dp),
-            )
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = errorMessage,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    text = "Retry last request",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.clickable { onRetry() },
+                )
+            }
         }
         SourceTabsRow(
             tabs = defaultSourceTabs,
@@ -335,7 +351,7 @@ private fun SuggestionCard(
             )
         }
         Text(
-            text = "Source: ${entry.source.name}${entry.fallbackReason?.let { " • $it" } ?: ""}",
+            text = "Source: ${entry.source.name}${entry.fallbackReason?.let { " • ${toFallbackLabel(it)}" } ?: ""}",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
@@ -376,6 +392,26 @@ private fun SuggestionCard(
                 }
             }
         }
+    }
+}
+
+private fun toFallbackLabel(rawReason: String): String {
+    return when (rawReason) {
+        "cached" -> "cached cloud response"
+        "circuit_breaker_open" -> "cloud cooldown active"
+        "cloud_timeout" -> "cloud timeout"
+        "cloud_providers_cooldown" -> "cloud providers cooling down"
+        "cloud_rate_limited" -> "cloud rate-limited"
+        "cloud_empty" -> "cloud returned empty result"
+        "cloud_error_both_providers" -> "all cloud providers failed"
+        "cloud_error" -> "cloud request failed"
+        "high_quality_mode" -> "high quality mode"
+        "insufficient_count" -> "on-device count below threshold"
+        "length_over_limit" -> "on-device reply too long"
+        "blocked_content" -> "safety filtered"
+        "low_confidence" -> "on-device confidence too low"
+        "language_mismatch" -> "language mismatch"
+        else -> rawReason.replace('_', ' ')
     }
 }
 
