@@ -46,6 +46,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -101,9 +102,8 @@ class OverlayService : android.app.Service() {
 
     override fun onDestroy() {
         bubbleView?.let { runCatching { windowManager.removeView(it) } }
-        scrimView?.let { runCatching { windowManager.removeView(it) } }
+        clearScrim()
         bubbleView = null
-        scrimView = null
         NotificationEventBus.setServiceRunning(false)
         overlayOwner.performDestroy()
         serviceScope.cancel()
@@ -129,6 +129,10 @@ class OverlayService : android.app.Service() {
                         highQualityMode = true,
                     )
                     getHybridSuggestionsUseCase(context).getOrThrow()
+                }.onFailure { throwable ->
+                    if (throwable is CancellationException) {
+                        throw throwable
+                    }
                 }.onSuccess { hybridResult ->
                     val replies = hybridResult.suggestions.map { it.text }
                     Log.d(
@@ -149,6 +153,10 @@ class OverlayService : android.app.Service() {
                         NotificationEventBus.setLoading(false)
                     }
                 }.onFailure { throwable ->
+                    if (throwable is CancellationException) {
+                        Log.d(logTag, "AI pipeline cancelled for ${event.appSource}; likely superseded by a newer event.")
+                        return@onFailure
+                    }
                     val errorMsg = throwable.message ?: "Failed to generate reply"
                     NotificationEventBus.setError(errorMsg)
                     Log.e(logTag, "AI call failed for ${event.appSource}: $errorMsg", throwable)
@@ -200,11 +208,13 @@ class OverlayService : android.app.Service() {
                     },
                     onCollapse = {
                         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                        clearScrim()
                         renderOverlay()
                     },
                     onClear = {
                         NotificationEventBus.clearHistory()
                         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                        clearScrim()
                         renderOverlay()
                     },
                     onToggleUpdates = { NotificationEventBus.togglePaused() },
@@ -225,6 +235,7 @@ class OverlayService : android.app.Service() {
         val meta = NotificationEventBus.metaState.value
 
         if (!meta.isBubbleVisible) {
+            clearScrim()
             overlayParams.width = 1
             overlayParams.height = 1
             overlayParams.flags = overlayParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -336,23 +347,24 @@ class OverlayService : android.app.Service() {
         prefs.edit().putInt("overlay_x", params.x).putInt("overlay_y", params.y).apply()
     }
 
-    private fun copyToClipboard(text: String) {
+    private fun copyToClipboard(text: String, feedbackMessage: String = "Copied to clipboard") {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("reply", text))
-        Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, feedbackMessage, Toast.LENGTH_SHORT).show()
         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+        clearScrim()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) renderOverlay()
     }
 
     private fun sendDirectReply(text: String, actionKey: String) {
         val action = DirectReplyRegistry.get(actionKey)
         if (action == null) {
-            copyToClipboard(text)
+            copyToClipboard(text, "Direct send unavailable. Copied to clipboard.")
             return
         }
         val remoteInput = action.remoteInputs?.firstOrNull()
         if (remoteInput == null) {
-            copyToClipboard(text)
+            copyToClipboard(text, "Direct send unavailable. Copied to clipboard.")
             return
         }
         try {
@@ -368,10 +380,11 @@ class OverlayService : android.app.Service() {
             Toast.makeText(this, "Reply sent!", Toast.LENGTH_SHORT).show()
             DirectReplyRegistry.remove(actionKey)
             NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+            clearScrim()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) renderOverlay()
         } catch (e: PendingIntent.CanceledException) {
             Log.e(logTag, "Direct reply failed, falling back to clipboard", e)
-            copyToClipboard(text)
+            copyToClipboard(text, "Send failed. Copied to clipboard.")
         }
     }
 
@@ -397,6 +410,11 @@ class OverlayService : android.app.Service() {
         const val logTag = "SmartAssistant"
         const val overlayChannelId = "overlay_service_channel"
         const val overlayNotificationId = 101
+    }
+
+    private fun clearScrim() {
+        scrimView?.let { runCatching { windowManager.removeView(it) } }
+        scrimView = null
     }
 }
 

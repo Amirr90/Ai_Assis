@@ -21,3 +21,8 @@ fun appLabelFor(packageName: String): String =
     knownMonitorableApps.find { it.packageName == packageName }
         ?.shortLabel
         ?: packageName.substringAfterLast(".").uppercase().take(3)
+
+fun appDisplayLabelFor(packageName: String): String =
+    knownMonitorableApps.find { it.packageName == packageName }
+        ?.label
+        ?: packageName.substringAfterLast(".")

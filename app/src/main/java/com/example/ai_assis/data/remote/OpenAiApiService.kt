@@ -5,20 +5,27 @@ import com.example.ai_assis.data.remote.dto.MessageDto
 import com.example.ai_assis.data.remote.dto.ReplyRequestDto
 import com.example.ai_assis.data.remote.dto.ReplyResponseDto
 import com.example.ai_assis.domain.model.ReplyTone
+import android.util.Log
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import javax.inject.Inject
+import kotlinx.serialization.json.Json
 
 class OpenAiApiService @Inject constructor(
     private val httpClient: HttpClient,
 ) {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
+
     suspend fun getReplies(
         message: String,
         tone: ReplyTone,
@@ -28,6 +35,9 @@ class OpenAiApiService @Inject constructor(
         languageHint: String? = null,
         styleHint: String? = null,
     ): List<String> {
+        val hasApiKey = BuildConfig.OPENAI_KEY.isNotBlank()
+        Log.d(logTag, "OpenAI request start. hasApiKey=$hasApiKey tone=${tone.name} sender=${sender ?: "unknown"}")
+
         val contextKeywords = extractKeywords(
             text = buildString {
                 append(message)
@@ -79,12 +89,37 @@ class OpenAiApiService @Inject constructor(
                         ),
                     ),
                 )
-            }.body<ReplyResponseDto>()
-        } catch (_: ResponseException) {
+            }
+        } catch (exception: ResponseException) {
+            val statusCode = exception.response.status.value
+            val responseBody = runCatching { exception.response.bodyAsText() }.getOrDefault("<unable_to_read_body>")
+            Log.e(logTag, "OpenAI HTTP error. status=$statusCode body=$responseBody")
+            return fallbackReplies(message = message, languageHint = languageHint)
+        } catch (throwable: Throwable) {
+            Log.e(logTag, "OpenAI request failed. ${throwable.message}", throwable)
             return fallbackReplies(message = message, languageHint = languageHint)
         }
 
-        val content = response.choices.firstOrNull()?.message?.content.orEmpty()
+        val responseBody = runCatching { response.bodyAsText() }.getOrDefault("")
+        Log.d(
+            logTag,
+            "OpenAI success response. status=${response.status.value} bodySnippet=${responseBody.toLogSnippet()}",
+        )
+        val parsedResponse = runCatching { json.decodeFromString(ReplyResponseDto.serializer(), responseBody) }
+            .getOrElse { parseError ->
+                Log.e(logTag, "OpenAI response parse failed. ${parseError.message}")
+                return fallbackReplies(message = message, languageHint = languageHint)
+            }
+
+        val firstChoice = parsedResponse.choices.firstOrNull()
+        val content = firstChoice?.message?.content.orEmpty()
+        Log.d(
+            logTag,
+            "OpenAI response received. choices=${parsedResponse.choices.size} rawContentLength=${content.length} finishReason=${firstChoice?.finishReason ?: "unknown"}",
+        )
+        if (content.isBlank()) {
+            Log.w(logTag, "OpenAI content is blank. bodySnippet=${responseBody.toLogSnippet()}")
+        }
         val rawCandidates = parseJsonReplies(content).ifEmpty {
             content
                 .lineSequence()
@@ -95,11 +130,11 @@ class OpenAiApiService @Inject constructor(
         }
 
         val ranked = rawCandidates
-            .lineSequence()
-            .map { it.toString().trim() }
-            .filter { it.isNotBlank() }
+            .asSequence()
+            .map { candidate: String -> candidate.trim() }
+            .filter { candidate: String -> candidate.isNotBlank() }
             .distinct()
-            .map { it.take(90) }
+            .map { candidate: String -> candidate.take(90) }
             .sortedByDescending { candidate ->
                 scoreCandidate(
                     candidate = candidate,
@@ -110,7 +145,12 @@ class OpenAiApiService @Inject constructor(
             .take(3)
             .toList()
 
+        Log.d(logTag, "OpenAI parsed replies count=${ranked.size}")
         return ranked.ifEmpty { fallbackReplies(message = message, languageHint = languageHint) }
+    }
+
+    private companion object {
+        const val logTag = "SmartAssistant"
     }
 }
 
@@ -150,11 +190,24 @@ private fun extractKeywords(text: String): Set<String> {
 }
 
 private fun fallbackReplies(message: String, languageHint: String?): List<String> {
+    val lower = message.lowercase()
     val isHindi = languageHint == "hi" || message.any { it.code in 0x0900..0x097F }
     return if (isHindi) {
-        listOf("ठीक है, मैं इसे देख रहा हूँ।", "समझ गया, अभी जवाब देता हूँ।", "हाँ, इस पर अपडेट देता हूँ।")
+        when {
+            lower.contains("?") -> listOf("हाँ, मैं चेक करके बताता हूँ।", "जी, इसका अपडेट अभी देता हूँ।", "ठीक है, मैं कन्फर्म करके बताता हूँ।")
+            lower.contains("कहाँ") || lower.contains("लोकेशन") -> listOf("मैं लोकेशन भेज रहा हूँ।", "मैं पास ही हूँ, 10 मिनट में आता हूँ।", "बस पहुँचने वाला हूँ।")
+            lower.contains("मीटिंग") || lower.contains("रिपोर्ट") || lower.contains("डेडलाइन") -> listOf("ठीक है, इसे प्राथमिकता देता हूँ।", "मीटिंग से पहले अपडेट शेयर कर दूँगा।", "रिपोर्ट का स्टेटस अभी भेजता हूँ।")
+            lower.contains("धन्यवाद") || lower.contains("शुक्रिया") -> listOf("कोई बात नहीं!", "हमेशा मदद के लिए तैयार हूँ।", "खुशी हुई मदद करके।")
+            else -> listOf("ठीक है, मैं इसे देख रहा हूँ।", "समझ गया, अभी जवाब देता हूँ।", "हाँ, इस पर अपडेट देता हूँ।")
+        }
     } else {
-        listOf("Got it, I will check and update you.", "Understood, I will get back shortly.", "Noted, let me confirm and reply.")
+        when {
+            lower.contains("?") -> listOf("Yes, let me confirm and get back.", "I will check this and update you shortly.", "Noted, sharing a confirmed update soon.")
+            lower.contains("where") || lower.contains("location") || lower.contains("kidhar") || lower.contains("kaha") -> listOf("I am nearby, sharing location now.", "On the way, I will reach soon.", "I am heading there, will update in a bit.")
+            lower.contains("meeting") || lower.contains("report") || lower.contains("deadline") -> listOf("Noted, I will prioritize this and update.", "I will share the latest status before the deadline.", "Understood, I will align this before the meeting.")
+            lower.contains("thanks") || lower.contains("thank you") || lower.contains("thx") -> listOf("You are welcome, happy to help.", "Anytime, glad this helped.", "No problem, feel free to ping anytime.")
+            else -> listOf("Got it, I will check and update you.", "Understood, I will get back shortly.", "Noted, let me confirm and reply.")
+        }
     }
 }
 
@@ -162,3 +215,8 @@ private val stopWords = setOf(
     "this", "that", "with", "from", "have", "will", "your", "about", "just", "what",
     "where", "when", "then", "there", "please", "karke", "karte", "nahi", "haan",
 )
+
+private fun String.toLogSnippet(maxLen: Int = 1200): String {
+    val sanitized = replace("\n", "\\n")
+    return if (sanitized.length <= maxLen) sanitized else sanitized.take(maxLen) + "...(truncated)"
+}

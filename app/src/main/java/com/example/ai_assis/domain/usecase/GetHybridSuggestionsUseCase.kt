@@ -76,7 +76,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                         HybridSuggestionResult(
                             suggestions = cloudSuggestions,
                             source = SuggestionSource.CLOUD,
-                            fallbackReason = fallbackReason,
+                            fallbackReason = null,
                         ),
                     )
                 } else {

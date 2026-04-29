@@ -1,7 +1,10 @@
 package com.example.ai_assis.presentation.ui.overlay
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,19 +26,34 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.example.ai_assis.domain.model.appLabelFor
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import kotlinx.coroutines.delay
+import com.example.ai_assis.domain.model.appDisplayLabelFor
+import com.example.ai_assis.presentation.ui.components.AppSourceIcon
+import com.example.ai_assis.presentation.ui.components.SourceTab
+import com.example.ai_assis.presentation.ui.components.SourceTabsRow
+import com.example.ai_assis.presentation.ui.components.appIconResFor
+import com.example.ai_assis.presentation.ui.components.defaultSourceTabs
+import com.example.ai_assis.presentation.ui.components.sourceTabFromKey
 import com.example.ai_assis.service.NotificationEventBus
 
 @Composable
@@ -137,7 +155,17 @@ private fun ExpandedChatPanel(
     onDirectSend: (String, String) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    val visibleItems = remember(items) { items.take(12) }
+    var selectedTabKey by rememberSaveable { mutableStateOf(SourceTab.All.key) }
+    val selectedTab = remember(selectedTabKey) { sourceTabFromKey(selectedTabKey) }
+    val filteredItems = remember(items, selectedTab) {
+        val selectedPackage = selectedTab.packageName
+        if (selectedPackage == null) {
+            items
+        } else {
+            items.filter { it.chatMessage.appSource == selectedPackage }
+        }
+    }
+    val visibleItems = remember(filteredItems) { filteredItems.take(12) }
     Column(
         modifier = Modifier
             .background(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp))
@@ -212,9 +240,20 @@ private fun ExpandedChatPanel(
                     .padding(8.dp),
             )
         }
-        if (items.isEmpty() && !isLoading && errorMessage == null) {
+        SourceTabsRow(
+            tabs = defaultSourceTabs,
+            selectedTab = selectedTab,
+            onTabSelected = { selectedTabKey = it.key },
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        if (visibleItems.isEmpty() && !isLoading && errorMessage == null) {
             Text(
-                text = "No suggestions yet. Open WhatsApp or Instagram and receive a message.",
+                text = if (selectedTab == SourceTab.All) {
+                    "No suggestions yet. Open WhatsApp, Instagram, or LinkedIn and receive a message."
+                } else {
+                    "No suggestions yet for ${selectedTab.title}."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
@@ -252,6 +291,9 @@ private fun SuggestionCard(
     onReplyClick: (String) -> Unit,
     onDirectSend: (String, String) -> Unit,
 ) {
+    var activeSendKey by remember(entry.id) { mutableStateOf<String?>(null) }
+    var isMessageExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
+    var isMessageOverflowing by rememberSaveable(entry.id) { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -274,7 +316,24 @@ private fun SuggestionCard(
             text = entry.chatMessage.message,
             color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodySmall,
+            maxLines = if (isMessageExpanded) Int.MAX_VALUE else 3,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { layoutResult ->
+                isMessageOverflowing = if (isMessageExpanded) {
+                    true
+                } else {
+                    layoutResult.hasVisualOverflow
+                }
+            },
         )
+        if (isMessageOverflowing) {
+            Text(
+                text = if (isMessageExpanded) "Show less" else "Show more",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.clickable { isMessageExpanded = !isMessageExpanded },
+            )
+        }
         Text(
             text = "Source: ${entry.source.name}${entry.fallbackReason?.let { " • $it" } ?: ""}",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -298,14 +357,22 @@ private fun SuggestionCard(
                 )
                 if (entry.chatMessage.replyActionKey != null) {
                     Spacer(Modifier.width(6.dp))
-                    Icon(
-                        imageVector = Icons.Default.Send,
-                        contentDescription = "Send directly",
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clickable { onDirectSend(reply, entry.chatMessage.replyActionKey) },
+                    val sendKey = "${entry.id}:$reply"
+                    val isSending = activeSendKey == sendKey
+                    SmoothSendButton(
+                        isSending = isSending,
+                        onClick = {
+                            if (isSending) return@SmoothSendButton
+                            activeSendKey = sendKey
+                            onDirectSend(reply, entry.chatMessage.replyActionKey)
+                        },
                     )
+                    LaunchedEffect(isSending, sendKey) {
+                        if (isSending) {
+                            delay(700)
+                            if (activeSendKey == sendKey) activeSendKey = null
+                        }
+                    }
                 }
             }
         }
@@ -313,32 +380,60 @@ private fun SuggestionCard(
 }
 
 @Composable
-private fun AppSourceBadge(packageName: String) {
-    val (label, bgColor) = appBadgeFor(packageName)
-    Box(
+private fun SmoothSendButton(
+    isSending: Boolean,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.94f else 1f,
+        animationSpec = tween(durationMillis = 110),
+        label = "sendButtonScale",
+    )
+
+    FilledTonalIconButton(
+        onClick = onClick,
+        enabled = !isSending,
+        interactionSource = interactionSource,
         modifier = Modifier
-            .background(color = bgColor, shape = RoundedCornerShape(4.dp))
-            .padding(horizontal = 5.dp, vertical = 2.dp),
-        contentAlignment = Alignment.Center,
+            .size(28.dp)
+            .scale(scale),
     ) {
-        Text(
-            text = label,
-            color = Color.White,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-        )
+        if (isSending) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Send,
+                contentDescription = "Send directly",
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(14.dp),
+            )
+        }
     }
 }
 
-private fun appBadgeFor(packageName: String): Pair<String, Color> {
-    return when (packageName) {
-        "com.whatsapp" -> "WA" to Color(0xFF25D366)
-        "com.instagram.android" -> "IG" to Color(0xFFE1306C)
-        "com.linkedin.android" -> "LI" to Color(0xFF0A66C2)
-        "org.telegram.messenger" -> "TG" to Color(0xFF2CA5E0)
-        "com.twitter.android" -> "X" to Color(0xFF1DA1F2)
-        "com.facebook.orca" -> "FB" to Color(0xFF0084FF)
-        "com.snapchat.android" -> "SC" to Color(0xFFE3A008)
-        else -> appLabelFor(packageName) to Color(0xFF6750A4)
+@Composable
+private fun AppSourceBadge(packageName: String) {
+    Row(
+        modifier = Modifier
+            .background(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        AppSourceIcon(
+            packageName = packageName,
+            iconRes = appIconResFor(packageName),
+            fallbackLabel = appDisplayLabelFor(packageName).take(1),
+        )
+        Text(
+            text = appDisplayLabelFor(packageName),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+        )
     }
 }

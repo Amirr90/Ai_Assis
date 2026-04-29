@@ -44,6 +44,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +55,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.ai_assis.domain.model.ReplyTone
+import com.example.ai_assis.domain.model.appDisplayLabelFor
+import com.example.ai_assis.presentation.ui.components.AppSourceIcon
+import com.example.ai_assis.presentation.ui.components.SourceTab
+import com.example.ai_assis.presentation.ui.components.SourceTabsRow
+import com.example.ai_assis.presentation.ui.components.appIconResFor
+import com.example.ai_assis.presentation.ui.components.defaultSourceTabs
+import com.example.ai_assis.presentation.ui.components.sourceTabFromKey
 import com.example.ai_assis.presentation.viewmodel.HomeViewModel
 import com.example.ai_assis.service.NotificationEventBus
 import com.example.ai_assis.util.PRIVACY_POLICY_URL
@@ -79,6 +87,16 @@ fun HomeScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     var hasNotification by remember { mutableStateOf(PermissionUtils.hasNotificationAccess(context)) }
     var hasOverlay by remember { mutableStateOf(PermissionUtils.hasOverlayPermission(context)) }
+    var selectedSourceTabKey by rememberSaveable { mutableStateOf(SourceTab.All.key) }
+    val selectedSourceTab = remember(selectedSourceTabKey) { sourceTabFromKey(selectedSourceTabKey) }
+    val filteredHistory = remember(chatHistory, selectedSourceTab) {
+        val selectedPackage = selectedSourceTab.packageName
+        if (selectedPackage == null) {
+            chatHistory
+        } else {
+            chatHistory.filter { it.chatMessage.appSource == selectedPackage }
+        }
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -177,18 +195,30 @@ fun HomeScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            SourceTabsRow(
+                tabs = defaultSourceTabs,
+                selectedTab = selectedSourceTab,
+                onTabSelected = { selectedSourceTabKey = it.key },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+            )
         }
 
-        if (chatHistory.isEmpty()) {
+        if (filteredHistory.isEmpty()) {
             item {
                 Text(
-                    text = "No suggestions yet. Enable the assistant, then receive a new message from a monitored app.",
+                    text = if (selectedSourceTab == SourceTab.All) {
+                        "No suggestions yet. Enable the assistant, then receive a new message from a monitored app."
+                    } else {
+                        "No suggestions yet for ${selectedSourceTab.title}."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         } else {
-            items(chatHistory, key = { it.createdAtMs }) { item ->
+            items(filteredHistory, key = { it.createdAtMs }) { item ->
                 MessageSuggestionCard(item = item)
             }
         }
@@ -346,11 +376,27 @@ private fun MessageSuggestionCard(item: NotificationEventBus.ChatSuggestionItem)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            text = "${item.chatMessage.sender} ? ${item.chatMessage.appSource}",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AppSourceIcon(
+                packageName = item.chatMessage.appSource,
+                iconRes = appIconResFor(item.chatMessage.appSource),
+                fallbackLabel = appDisplayLabelFor(item.chatMessage.appSource).take(1),
+            )
+            Text(
+                text = item.chatMessage.sender,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "- ${appDisplayLabelFor(item.chatMessage.appSource)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
         Text(
             text = item.chatMessage.message,
             style = MaterialTheme.typography.bodyLarge,

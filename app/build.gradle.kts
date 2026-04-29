@@ -35,8 +35,8 @@ android {
         )
         buildConfigField(
             "String",
-            "GEMINI_BACKEND_BASE_URL",
-            "\"${localProperties.getProperty("GEMINI_BACKEND_BASE_URL", "https://example.com")}\""
+            "SUGGESTION_PROVIDER",
+            "\"${localProperties.getProperty("SUGGESTION_PROVIDER", "GEMINI")}\""
         )
         buildConfigField(
             "String",
