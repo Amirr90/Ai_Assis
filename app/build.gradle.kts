@@ -33,6 +33,16 @@ android {
             "OPENAI_KEY",
             "\"${localProperties.getProperty("OPENAI_KEY", "")}\""
         )
+        buildConfigField(
+            "String",
+            "GEMINI_BACKEND_BASE_URL",
+            "\"${localProperties.getProperty("GEMINI_BACKEND_BASE_URL", "https://example.com")}\""
+        )
+        buildConfigField(
+            "String",
+            "GEMINI_BACKEND_API_KEY",
+            "\"${localProperties.getProperty("GEMINI_BACKEND_API_KEY", "")}\""
+        )
     }
 
     buildTypes {
@@ -82,6 +92,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
+    testImplementation(libs.mockk)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

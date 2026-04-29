@@ -1,6 +1,7 @@
 package com.example.ai_assis.service
 
 import com.example.ai_assis.domain.model.ChatMessage
+import com.example.ai_assis.domain.model.SuggestionSource
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -14,6 +15,8 @@ object NotificationEventBus {
         val id: Long = System.currentTimeMillis(),
         val chatMessage: ChatMessage,
         val replies: List<String>,
+        val source: SuggestionSource = SuggestionSource.ON_DEVICE,
+        val fallbackReason: String? = null,
         val createdAtMs: Long = System.currentTimeMillis(),
         val isRead: Boolean = false,
     )
@@ -23,6 +26,9 @@ object NotificationEventBus {
         val unreadCount: Int = 0,
         val isServiceRunning: Boolean = false,
         val updatesPaused: Boolean = false,
+        val isLoading: Boolean = false,
+        val errorMessage: String? = null,
+        val isBubbleVisible: Boolean = false,
     )
 
     private val _events = MutableSharedFlow<ChatMessage>(extraBufferCapacity = 16)
@@ -30,6 +36,7 @@ object NotificationEventBus {
 
     private val _chatHistory = MutableStateFlow<List<ChatSuggestionItem>>(emptyList())
     val chatHistory: StateFlow<List<ChatSuggestionItem>> = _chatHistory.asStateFlow()
+
     private val _metaState = MutableStateFlow(OverlayMetaState())
     val metaState: StateFlow<OverlayMetaState> = _metaState.asStateFlow()
 
@@ -37,13 +44,46 @@ object NotificationEventBus {
         _events.tryEmit(message)
     }
 
-    fun addSuggestion(message: ChatMessage, replies: List<String>) {
+    fun addSuggestion(
+        message: ChatMessage,
+        replies: List<String>,
+        source: SuggestionSource = SuggestionSource.ON_DEVICE,
+        fallbackReason: String? = null,
+    ) {
         if (replies.isEmpty() || _metaState.value.updatesPaused) return
+        val now = System.currentTimeMillis()
+        val topItem = _chatHistory.value.firstOrNull()
+        if (
+            topItem != null &&
+            topItem.chatMessage.sender == message.sender &&
+            topItem.chatMessage.message == message.message &&
+            topItem.chatMessage.appSource == message.appSource &&
+            topItem.replies == replies &&
+            (now - topItem.createdAtMs) <= duplicateSuggestionWindowMs
+        ) {
+            return
+        }
+
         val unreadBump = if (_metaState.value.mode == OverlayMode.HEAD) 1 else 0
-        _chatHistory.value = (listOf(
-            ChatSuggestionItem(chatMessage = message, replies = replies),
-        ) + _chatHistory.value).take(20)
-        _metaState.value = _metaState.value.copy(unreadCount = _metaState.value.unreadCount + unreadBump)
+        val newItem = ChatSuggestionItem(
+            chatMessage = message,
+            replies = replies,
+            source = source,
+            fallbackReason = fallbackReason,
+            createdAtMs = now,
+        )
+        _chatHistory.value = if (_metaState.value.mode == OverlayMode.PANEL) {
+            // Keep list stable while user is reading/scrolling the panel.
+            (_chatHistory.value + newItem).takeLast(20)
+        } else {
+            (listOf(newItem) + _chatHistory.value).take(20)
+        }
+        _metaState.value = _metaState.value.copy(
+            unreadCount = _metaState.value.unreadCount + unreadBump,
+            isLoading = false,
+            errorMessage = null,
+            isBubbleVisible = true,
+        )
     }
 
     fun setMode(mode: OverlayMode) {
@@ -60,14 +100,35 @@ object NotificationEventBus {
 
     fun clearHistory() {
         _chatHistory.value = emptyList()
-        _metaState.value = _metaState.value.copy(unreadCount = 0)
+        _metaState.value = _metaState.value.copy(
+            unreadCount = 0,
+            isBubbleVisible = false,
+            errorMessage = null,
+        )
     }
 
     fun setServiceRunning(running: Boolean) {
-        _metaState.value = _metaState.value.copy(isServiceRunning = running)
+        _metaState.value = _metaState.value.copy(
+            isServiceRunning = running,
+            isBubbleVisible = if (!running) false else _metaState.value.isBubbleVisible,
+        )
+    }
+
+    fun setLoading(loading: Boolean) {
+        _metaState.value = _metaState.value.copy(
+            isLoading = loading,
+            errorMessage = if (loading) null else _metaState.value.errorMessage,
+            isBubbleVisible = if (loading) true else _metaState.value.isBubbleVisible,
+        )
+    }
+
+    fun setError(message: String?) {
+        _metaState.value = _metaState.value.copy(isLoading = false, errorMessage = message)
     }
 
     private fun markAllAsRead() {
         _chatHistory.value = _chatHistory.value.map { it.copy(isRead = true) }
     }
+
+    private const val duplicateSuggestionWindowMs = 4_000L
 }

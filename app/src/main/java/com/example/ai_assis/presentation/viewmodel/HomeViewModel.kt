@@ -46,4 +46,8 @@ class HomeViewModel @Inject constructor(
             toneRepository.saveTone(tone)
         }
     }
+
+    fun clearHistory() {
+        NotificationEventBus.clearHistory()
+    }
 }

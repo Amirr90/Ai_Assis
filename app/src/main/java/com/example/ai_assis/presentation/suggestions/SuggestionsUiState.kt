@@ -1,0 +1,24 @@
+package com.example.ai_assis.presentation.suggestions
+
+import com.example.ai_assis.domain.model.SuggestionTone
+
+data class SuggestionsUiState(
+    val latestMessage: String = "",
+    val senderName: String = "",
+    val tone: SuggestionTone = SuggestionTone.CASUAL,
+    val suggestions: List<SuggestionUiModel> = emptyList(),
+    val isLoading: Boolean = false,
+    val source: SuggestionSourceUi = SuggestionSourceUi.ON_DEVICE,
+    val errorMessage: String? = null,
+    val showPermissionBanner: Boolean = false,
+)
+
+data class SuggestionUiModel(
+    val text: String,
+    val confidence: Double,
+)
+
+enum class SuggestionSourceUi {
+    ON_DEVICE,
+    CLOUD,
+}

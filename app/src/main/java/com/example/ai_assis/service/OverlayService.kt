@@ -3,13 +3,15 @@ package com.example.ai_assis.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service
+import android.app.PendingIntent
+import android.app.RemoteInput
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
 import android.view.Gravity
@@ -18,10 +20,9 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.Toast
-import androidx.annotation.RequiresApi
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -35,22 +36,40 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.ai_assis.R
-import com.example.ai_assis.domain.usecase.GetAiRepliesUseCase
+import com.example.ai_assis.data.local.ConversationCacheDataSource
+import com.example.ai_assis.data.local.SenderStyleMemoryDataSource
+import com.example.ai_assis.domain.repository.SmartSuggestionRepository
+import com.example.ai_assis.domain.usecase.BuildConversationContextUseCase
+import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
 import com.example.ai_assis.presentation.ui.overlay.BubbleContent
 import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import javax.inject.Inject
 
 @AndroidEntryPoint
-class OverlayService : Service() {
+class OverlayService : android.app.Service() {
+
     @Inject
-    lateinit var getAiRepliesUseCase: GetAiRepliesUseCase
+    lateinit var smartSuggestionRepository: SmartSuggestionRepository
+
+    @Inject
+    lateinit var conversationCacheDataSource: ConversationCacheDataSource
+
+    @Inject
+    lateinit var senderStyleMemoryDataSource: SenderStyleMemoryDataSource
+
+    @Inject
+    lateinit var buildConversationContextUseCase: BuildConversationContextUseCase
+
+    @Inject
+    lateinit var getHybridSuggestionsUseCase: GetHybridSuggestionsUseCase
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var windowManager: WindowManager
@@ -59,10 +78,7 @@ class OverlayService : Service() {
     private lateinit var overlayParams: WindowManager.LayoutParams
     private var bubbleView: ComposeView? = null
     private var scrimView: View? = null
-    private var latestOverlayX = 0
-    private var latestOverlayY = 0
 
-    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences("overlay_prefs", Context.MODE_PRIVATE)
@@ -73,7 +89,9 @@ class OverlayService : Service() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         startForeground(overlayNotificationId, buildForegroundNotification())
         NotificationEventBus.setServiceRunning(true)
-        createOverlayIfPermitted()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            createOverlayIfPermitted()
+        }
         observeMessages()
     }
 
@@ -82,8 +100,8 @@ class OverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        bubbleView?.let { windowManager.removeView(it) }
-        scrimView?.let { windowManager.removeView(it) }
+        bubbleView?.let { runCatching { windowManager.removeView(it) } }
+        scrimView?.let { runCatching { windowManager.removeView(it) } }
         bubbleView = null
         scrimView = null
         NotificationEventBus.setServiceRunning(false)
@@ -92,55 +110,73 @@ class OverlayService : Service() {
         super.onDestroy()
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun observeMessages() {
         serviceScope.launch {
             NotificationEventBus.events.collectLatest { event ->
                 Log.d(logTag, "AI pipeline started for ${event.appSource}")
-                getAiRepliesUseCase(event.message).collect { result ->
-                    result.onSuccess { replies ->
-                        Log.d(logTag, "AI call success for ${event.appSource} with ${replies.size} replies")
-                        if (replies.isNotEmpty()) {
-                            NotificationEventBus.addSuggestion(message = event, replies = replies)
-                            Log.d(logTag, "Suggestion added for ${event.appSource}")
-                            renderOverlay()
-                        } else {
-                            Log.w(logTag, "AI returned empty replies for ${event.appSource}")
-                        }
-                    }
-                    result.onFailure { throwable ->
-                        Log.e(
-                            logTag,
-                            "AI call failed for ${event.appSource}: ${throwable.message.orEmpty()}",
-                            throwable,
+                NotificationEventBus.setLoading(true)
+                runCatching {
+                    conversationCacheDataSource.appendMessage(event)
+                    val tone = smartSuggestionRepository.observeTone().first()
+                    senderStyleMemoryDataSource.rememberStyle(event.appSource, event.sender, tone)
+                    val recentMessages = conversationCacheDataSource.recentMessages(event.appSource, event.sender)
+                    val styleHint = senderStyleMemoryDataSource.getStyleHint(event.appSource, event.sender)
+                    val context = buildConversationContextUseCase(
+                        message = event,
+                        tone = tone,
+                        recentMessages = recentMessages,
+                        styleHint = styleHint,
+                        highQualityMode = true,
+                    )
+                    getHybridSuggestionsUseCase(context).getOrThrow()
+                }.onSuccess { hybridResult ->
+                    val replies = hybridResult.suggestions.map { it.text }
+                    Log.d(
+                        logTag,
+                        "Suggestion source=${hybridResult.source} count=${replies.size} fallback=${hybridResult.fallbackReason}",
+                    )
+                    if (replies.isNotEmpty()) {
+                        NotificationEventBus.addSuggestion(
+                            message = event,
+                            replies = replies,
+                            source = hybridResult.source,
+                            fallbackReason = hybridResult.fallbackReason,
                         )
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            renderOverlay()
+                        }
+                    } else {
+                        NotificationEventBus.setLoading(false)
                     }
+                }.onFailure { throwable ->
+                    val errorMsg = throwable.message ?: "Failed to generate reply"
+                    NotificationEventBus.setError(errorMsg)
+                    Log.e(logTag, "AI call failed for ${event.appSource}: $errorMsg", throwable)
                 }
             }
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun createOverlayIfPermitted() {
         if (!android.provider.Settings.canDrawOverlays(this)) return
         if (bubbleView != null) return
 
+        val metrics = resources.displayMetrics
+        val marginPx = 16.dpToPx()
+        val defaultX = (metrics.widthPixels - 84.dpToPx()).coerceAtLeast(marginPx)
+        val defaultY = (metrics.heightPixels - 180.dpToPx()).coerceAtLeast(marginPx)
+
         overlayParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            1,
+            1,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            val metrics = resources.displayMetrics
-            val marginPx = 16.dpToPx()
-            val defaultX = (metrics.widthPixels - 84.dpToPx()).coerceAtLeast(marginPx)
-            val defaultY = (metrics.heightPixels - 180.dpToPx()).coerceAtLeast(marginPx)
             x = prefs.getInt("overlay_x", defaultX)
             y = prefs.getInt("overlay_y", defaultY)
-            latestOverlayX = x
-            latestOverlayY = y
         }
 
         bubbleView = ComposeView(this).apply {
@@ -154,6 +190,9 @@ class OverlayService : Service() {
                     mode = meta.mode,
                     unreadCount = meta.unreadCount,
                     updatesPaused = meta.updatesPaused,
+                    isLoading = meta.isLoading,
+                    errorMessage = meta.errorMessage,
+                    isBubbleVisible = meta.isBubbleVisible,
                     items = items,
                     onHeadClick = {
                         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
@@ -163,9 +202,14 @@ class OverlayService : Service() {
                         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
                         renderOverlay()
                     },
-                    onClear = { NotificationEventBus.clearHistory() },
+                    onClear = {
+                        NotificationEventBus.clearHistory()
+                        NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                        renderOverlay()
+                    },
                     onToggleUpdates = { NotificationEventBus.togglePaused() },
                     onReplyClick = ::copyToClipboard,
+                    onDirectSend = ::sendDirectReply,
                 )
             }
         }
@@ -174,20 +218,29 @@ class OverlayService : Service() {
             makeDraggable(view, overlayParams)
             windowManager.addView(view, overlayParams)
         }
-        renderOverlay()
     }
 
     private fun renderOverlay() {
         val view = bubbleView ?: return
-        val mode = NotificationEventBus.metaState.value.mode
-        overlayParams.width = if (mode == NotificationEventBus.OverlayMode.HEAD) {
+        val meta = NotificationEventBus.metaState.value
+
+        if (!meta.isBubbleVisible) {
+            overlayParams.width = 1
+            overlayParams.height = 1
+            overlayParams.flags = overlayParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            windowManager.updateViewLayout(view, overlayParams)
+            return
+        }
+
+        overlayParams.flags = overlayParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        overlayParams.width = if (meta.mode == NotificationEventBus.OverlayMode.HEAD) {
             WindowManager.LayoutParams.WRAP_CONTENT
         } else {
             (resources.displayMetrics.widthPixels * 0.88f).roundToInt()
         }
         overlayParams.height = WindowManager.LayoutParams.WRAP_CONTENT
         windowManager.updateViewLayout(view, overlayParams)
-        updateScrimForMode(mode)
+        updateScrimForMode(meta.mode)
         view.invalidate()
     }
 
@@ -195,7 +248,7 @@ class OverlayService : Service() {
         if (mode == NotificationEventBus.OverlayMode.PANEL) {
             if (scrimView != null) return
             scrimView = View(this).apply {
-                setBackgroundColor(0x00000000)
+                setBackgroundColor(0x66000000)
                 setOnClickListener {
                     NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
                     renderOverlay()
@@ -212,7 +265,7 @@ class OverlayService : Service() {
             bubbleView?.let { windowManager.removeView(it) }
             bubbleView?.let { windowManager.addView(it, overlayParams) }
         } else {
-            scrimView?.let { windowManager.removeView(it) }
+            scrimView?.let { runCatching { windowManager.removeView(it) } }
             scrimView = null
         }
     }
@@ -224,13 +277,18 @@ class OverlayService : Service() {
         var touchDownRawY = 0f
         var hasMoved = false
         val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        val panelDragHandleHeightPx = 56.dpToPx().toFloat()
+        val panelDragHandleWidthPx = 140.dpToPx().toFloat()
 
         view.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.PANEL) {
-                        return@setOnTouchListener false
-                    }
+                    val mode = NotificationEventBus.metaState.value.mode
+                    val shouldStartDrag = mode == NotificationEventBus.OverlayMode.HEAD ||
+                            (mode == NotificationEventBus.OverlayMode.PANEL &&
+                                    event.y <= panelDragHandleHeightPx &&
+                                    event.x <= panelDragHandleWidthPx)
+                    if (!shouldStartDrag) return@setOnTouchListener false
                     initialX = params.x
                     initialY = params.y
                     touchDownRawX = event.rawX
@@ -275,15 +333,46 @@ class OverlayService : Service() {
         val maxY = (metrics.heightPixels - 64.dpToPx()).coerceAtLeast(0)
         params.y = params.y.coerceIn(0, maxY)
         windowManager.updateViewLayout(view, params)
-        latestOverlayX = params.x
-        latestOverlayY = params.y
-        prefs.edit().putInt("overlay_x", latestOverlayX).putInt("overlay_y", latestOverlayY).apply()
+        prefs.edit().putInt("overlay_x", params.x).putInt("overlay_y", params.y).apply()
     }
 
     private fun copyToClipboard(text: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("reply", text))
         Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+        NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) renderOverlay()
+    }
+
+    private fun sendDirectReply(text: String, actionKey: String) {
+        val action = DirectReplyRegistry.get(actionKey)
+        if (action == null) {
+            copyToClipboard(text)
+            return
+        }
+        val remoteInput = action.remoteInputs?.firstOrNull()
+        if (remoteInput == null) {
+            copyToClipboard(text)
+            return
+        }
+        try {
+            val intent = Intent()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                RemoteInput.addResultsToIntent(
+                    arrayOf(remoteInput),
+                    intent,
+                    Bundle().apply { putCharSequence(remoteInput.resultKey, text) },
+                )
+            }
+            action.actionIntent.send(this, 0, intent)
+            Toast.makeText(this, "Reply sent!", Toast.LENGTH_SHORT).show()
+            DirectReplyRegistry.remove(actionKey)
+            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) renderOverlay()
+        } catch (e: PendingIntent.CanceledException) {
+            Log.e(logTag, "Direct reply failed, falling back to clipboard", e)
+            copyToClipboard(text)
+        }
     }
 
     private fun buildForegroundNotification(): Notification {
@@ -296,7 +385,6 @@ class OverlayService : Service() {
             )
             manager.createNotificationChannel(channel)
         }
-
         return NotificationCompat.Builder(this, overlayChannelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Smart Chat Assistant")
@@ -312,21 +400,17 @@ class OverlayService : Service() {
     }
 }
 
-private fun Int.dpToPx(): Int = (this * android.content.res.Resources.getSystem().displayMetrics.density).roundToInt()
+private fun Int.dpToPx(): Int =
+    (this * android.content.res.Resources.getSystem().displayMetrics.density).roundToInt()
 
 private class OverlayViewTreeOwner : LifecycleOwner, SavedStateRegistryOwner, ViewModelStoreOwner {
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val savedStateController = SavedStateRegistryController.create(this)
     private val vmStore = ViewModelStore()
 
-    override val lifecycle: Lifecycle
-        get() = lifecycleRegistry
-
-    override val savedStateRegistry: SavedStateRegistry
-        get() = savedStateController.savedStateRegistry
-
-    override val viewModelStore: ViewModelStore
-        get() = vmStore
+    override val lifecycle: Lifecycle get() = lifecycleRegistry
+    override val savedStateRegistry: SavedStateRegistry get() = savedStateController.savedStateRegistry
+    override val viewModelStore: ViewModelStore get() = vmStore
 
     fun performCreate() {
         savedStateController.performAttach()
