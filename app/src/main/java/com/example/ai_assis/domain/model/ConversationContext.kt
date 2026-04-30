@@ -5,6 +5,7 @@ data class ConversationContext(
     val appPackage: String,
     val sender: String,
     val latestMessage: String,
+    val messageType: MessageType = MessageType.TEXT,
     val recentMessages: List<String>,
     val tone: SuggestionTone,
     val languageHint: String? = null,

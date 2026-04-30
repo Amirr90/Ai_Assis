@@ -23,6 +23,7 @@ class BuildConversationContextUseCase @Inject constructor() {
             appPackage = message.appSource,
             sender = message.sender,
             latestMessage = message.message,
+            messageType = message.messageType,
             recentMessages = normalizedRecent,
             tone = tone,
             languageHint = detectLanguageHint(message.message),

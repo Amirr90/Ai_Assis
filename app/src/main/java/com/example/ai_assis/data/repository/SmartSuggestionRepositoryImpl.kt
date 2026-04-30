@@ -1,7 +1,6 @@
 package com.example.ai_assis.data.repository
 
 import android.util.Log
-import com.example.ai_assis.BuildConfig
 import com.example.ai_assis.data.local.OnDeviceSuggestionGenerator
 import com.example.ai_assis.data.local.TonePreferencesDataStore
 import com.example.ai_assis.data.remote.OpenAiApiService
@@ -16,6 +15,7 @@ import com.example.ai_assis.domain.model.SuggestionSource
 import com.example.ai_assis.domain.model.SuggestionTone
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 
 class SmartSuggestionRepositoryImpl @Inject constructor(
@@ -32,6 +32,7 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
     }
 
     override suspend fun getCloudSuggestions(context: ConversationContext): Result<List<Suggestion>> {
+        val cloudStartMs = System.currentTimeMillis()
         val recentMessages = context.recentMessages.takeLast(8)
         val compiledConversationContext = buildCompiledConversationContext(
             sender = context.sender,
@@ -39,7 +40,10 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
             latestMessage = context.latestMessage,
         )
         val orderedProviders = orderedProviders()
-        Log.d(logTag, "Cloud providers order=$orderedProviders")
+        Log.d(
+            logTag,
+            "Cloud suggestion fetch start sender=${context.sender} app=${context.appPackage} providers=$orderedProviders recentCount=${recentMessages.size}",
+        )
 
         var lastError: Throwable? = null
         var anyAttempted = false
@@ -50,6 +54,7 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
             }
             anyAttempted = true
             Log.d(logTag, "Cloud provider attempt provider=$provider")
+            val providerStartMs = System.currentTimeMillis()
             val result = fetchCloudSuggestions(
                 provider = provider,
                 context = context,
@@ -59,10 +64,17 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
             result.onSuccess { suggestions ->
                 if (suggestions.isNotEmpty()) {
                     clearCooldown(provider)
-                    Log.d(logTag, "Cloud provider success provider=$provider count=${suggestions.size}")
+                    Log.d(
+                        logTag,
+                        "Cloud provider success provider=$provider count=${suggestions.size} durationMs=${System.currentTimeMillis() - providerStartMs}",
+                    )
+                    Log.d(logTag, "Cloud suggestion fetch success durationMs=${System.currentTimeMillis() - cloudStartMs}")
                     return Result.success(suggestions.take(3))
                 }
-                Log.d(logTag, "Cloud provider empty provider=$provider")
+                Log.d(
+                    logTag,
+                    "Cloud provider empty provider=$provider durationMs=${System.currentTimeMillis() - providerStartMs}",
+                )
             }.onFailure { throwable ->
                 val reason = classifyProviderFailure(throwable)
                 val wrapped = IllegalStateException(
@@ -71,13 +83,18 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
                 )
                 lastError = wrapped
                 registerProviderFailure(provider, wrapped)
-                Log.w(logTag, "Cloud provider failed provider=$provider reason=$reason")
+                Log.w(
+                    logTag,
+                    "Cloud provider failed provider=$provider reason=$reason durationMs=${System.currentTimeMillis() - providerStartMs}",
+                )
             }
         }
 
         if (!anyAttempted) {
+            Log.w(logTag, "Cloud suggestion fetch aborted: both providers on cooldown")
             return Result.failure(IllegalStateException("cloud_error_both_providers_cooldown"))
         }
+        Log.w(logTag, "Cloud suggestion fetch failed durationMs=${System.currentTimeMillis() - cloudStartMs}")
         return Result.failure(lastError ?: IllegalStateException("cloud_error_both_providers"))
     }
 
@@ -87,8 +104,8 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
         recentMessages: List<String>,
         compiledConversationContext: String,
     ): Result<List<Suggestion>> {
-        return runCatching {
-            when (provider) {
+        return try {
+            val suggestions = when (provider) {
                 CloudProvider.OPEN_AI -> {
                     val replies = openAiApiService.getReplies(
                         message = context.latestMessage,
@@ -126,6 +143,11 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
                     suggestionMapper.fromCloudResponse(response)
                 }
             }.take(3)
+            Result.success(suggestions)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (throwable: Throwable) {
+            Result.failure(throwable)
         }
     }
 
@@ -136,10 +158,7 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
     override fun observeTone(): Flow<SuggestionTone> = tonePreferencesDataStore.observeTone()
 
     private fun orderedProviders(): List<CloudProvider> {
-        return when (BuildConfig.SUGGESTION_PROVIDER.uppercase()) {
-            "GEMINI" -> listOf(CloudProvider.GEMINI, CloudProvider.OPEN_AI)
-            else -> listOf(CloudProvider.OPEN_AI, CloudProvider.GEMINI)
-        }
+        return listOf(CloudProvider.OPEN_AI, CloudProvider.GEMINI)
     }
 
     private fun registerProviderFailure(provider: CloudProvider, throwable: Throwable) {

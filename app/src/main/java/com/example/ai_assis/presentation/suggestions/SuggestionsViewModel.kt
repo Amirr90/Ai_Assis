@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai_assis.data.local.ConversationCacheDataSource
 import com.example.ai_assis.domain.model.ChatMessage
+import com.example.ai_assis.domain.model.MessageType
 import com.example.ai_assis.domain.model.SuggestionSource
 import com.example.ai_assis.domain.model.SuggestionTone
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
@@ -65,6 +66,8 @@ class SuggestionsViewModel @Inject constructor(
         if (previous != null &&
             previous.sender == message.sender &&
             previous.message == message.message &&
+            previous.appSource == message.appSource &&
+            previous.isSummaryNotification == message.isSummaryNotification &&
             (now - lastMessageAt) <= duplicateDebounceMs
         ) {
             return
@@ -86,6 +89,7 @@ class SuggestionsViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(
                 latestMessage = message.message,
                 senderName = message.sender,
+                mediaTypeLabel = message.messageType.toMediaTypeLabel(),
                 isLoading = true,
                 errorMessage = null,
             )
@@ -133,5 +137,16 @@ class SuggestionsViewModel @Inject constructor(
 
     private companion object {
         const val duplicateDebounceMs = 2_500L
+    }
+}
+
+private fun MessageType.toMediaTypeLabel(): String? {
+    return when (this) {
+        MessageType.TEXT -> null
+        MessageType.REEL -> "Reel received - quick replies only"
+        MessageType.IMAGE -> "Photo received - quick replies only"
+        MessageType.VIDEO -> "Video received - quick replies only"
+        MessageType.AUDIO -> "Audio received - quick replies only"
+        MessageType.STICKER -> "Sticker received - quick replies only"
     }
 }

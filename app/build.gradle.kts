@@ -31,7 +31,7 @@ android {
         buildConfigField(
             "String",
             "OPENAI_KEY",
-            "\"${localProperties.getProperty("OPENAI_KEY", "")}\""
+            "\"${localProperties.getProperty("OPENAI_KEY", "A")}\""
         )
         buildConfigField(
             "String",

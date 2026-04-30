@@ -38,9 +38,11 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.ai_assis.R
 import com.example.ai_assis.data.local.ConversationCacheDataSource
 import com.example.ai_assis.data.local.SenderStyleMemoryDataSource
+import com.example.ai_assis.domain.model.MessageDirection
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
 import com.example.ai_assis.domain.usecase.BuildConversationContextUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
+import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.presentation.ui.overlay.BubbleContent
 import com.example.ai_assis.presentation.ui.overlay.OverlayUiState
 import dagger.hilt.android.AndroidEntryPoint
@@ -114,14 +116,28 @@ class OverlayService : android.app.Service() {
     private fun observeMessages() {
         serviceScope.launch {
             NotificationEventBus.events.collectLatest { event ->
-                Log.d(logTag, "AI pipeline started for ${event.appSource}")
+                if (event.direction != MessageDirection.INCOMING) {
+                    Log.d(logTag, "Skipping suggestion fetch for non-incoming message direction=${event.direction}")
+                    return@collectLatest
+                }
+                val requestId = "${event.appSource}:${event.sender}:${System.currentTimeMillis()}"
+                val requestStartMs = System.currentTimeMillis()
+                Log.d(
+                    logTag,
+                    "Suggestion fetch start requestId=$requestId app=${event.appSource} sender=${event.sender}",
+                )
                 NotificationEventBus.setLoading(true)
                 runCatching {
+                    Log.d(logTag, "Suggestion fetch stage=request_context requestId=$requestId")
                     conversationCacheDataSource.appendMessage(event)
                     val tone = smartSuggestionRepository.observeTone().first()
                     senderStyleMemoryDataSource.rememberStyle(event.appSource, event.sender, tone)
                     val recentMessages = conversationCacheDataSource.recentMessages(event.appSource, event.sender)
                     val styleHint = senderStyleMemoryDataSource.getStyleHint(event.appSource, event.sender)
+                    Log.d(
+                        logTag,
+                        "Suggestion fetch stage=context_ready requestId=$requestId tone=$tone recentCount=${recentMessages.size} hasStyleHint=${!styleHint.isNullOrBlank()}",
+                    )
                     val context = buildConversationContextUseCase(
                         message = event,
                         tone = tone,
@@ -129,6 +145,7 @@ class OverlayService : android.app.Service() {
                         styleHint = styleHint,
                         highQualityMode = true,
                     )
+                    Log.d(logTag, "Suggestion fetch stage=hybrid_invoke requestId=$requestId")
                     getHybridSuggestionsUseCase(context).getOrThrow()
                 }.onFailure { throwable ->
                     if (throwable is CancellationException) {
@@ -136,9 +153,10 @@ class OverlayService : android.app.Service() {
                     }
                 }.onSuccess { hybridResult ->
                     val replies = hybridResult.suggestions.map { it.text }
+                    val elapsedMs = System.currentTimeMillis() - requestStartMs
                     Log.d(
                         logTag,
-                        "Suggestion source=${hybridResult.source} count=${replies.size} fallback=${hybridResult.fallbackReason}",
+                        "Suggestion fetch success requestId=$requestId source=${hybridResult.source} count=${replies.size} fallback=${hybridResult.fallbackReason} durationMs=$elapsedMs",
                     )
                     if (replies.isNotEmpty()) {
                         NotificationEventBus.clearFailure()
@@ -152,17 +170,26 @@ class OverlayService : android.app.Service() {
                             renderOverlay()
                         }
                     } else {
+                        Log.d(logTag, "Suggestion fetch empty requestId=$requestId durationMs=$elapsedMs")
                         NotificationEventBus.setLoading(false)
                     }
                 }.onFailure { throwable ->
+                    val elapsedMs = System.currentTimeMillis() - requestStartMs
                     if (throwable is CancellationException) {
-                        Log.d(logTag, "AI pipeline cancelled for ${event.appSource}; likely superseded by a newer event.")
+                        Log.d(
+                            logTag,
+                            "Suggestion fetch cancelled requestId=$requestId app=${event.appSource} durationMs=$elapsedMs (superseded by newer event)",
+                        )
                         return@onFailure
                     }
                     NotificationEventBus.recordFailure(event)
                     val errorMsg = userFriendlyError(throwable.message)
                     NotificationEventBus.setError(errorMsg)
-                    Log.e(logTag, "AI call failed for ${event.appSource}: $errorMsg", throwable)
+                    Log.e(
+                        logTag,
+                        "Suggestion fetch failed requestId=$requestId app=${event.appSource} durationMs=$elapsedMs error=$errorMsg",
+                        throwable,
+                    )
                 }
             }
         }
@@ -353,7 +380,7 @@ class OverlayService : android.app.Service() {
         prefs.edit().putInt("overlay_x", params.x).putInt("overlay_y", params.y).apply()
     }
 
-    private fun copyToClipboard(text: String, feedbackMessage: String = "Copied to clipboard") {
+    private fun copyToClipboard(text: String, feedbackMessage: String = getString(R.string.dashboard_copied_to_clipboard)) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("reply", text))
         Toast.makeText(this, feedbackMessage, Toast.LENGTH_SHORT).show()
@@ -362,15 +389,20 @@ class OverlayService : android.app.Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) renderOverlay()
     }
 
-    private fun sendDirectReply(text: String, actionKey: String) {
-        val action = DirectReplyRegistry.get(actionKey)
+    private fun sendDirectReply(text: String, chatMessage: ChatMessage) {
+        val action = DirectReplyRegistry.resolveForChat(
+            key = chatMessage.replyActionKey,
+            packageName = chatMessage.appSource,
+            sender = chatMessage.sender,
+        )
         if (action == null) {
-            copyToClipboard(text, "Direct send unavailable. Copied to clipboard.")
+            copyToClipboard(text, getString(R.string.dashboard_direct_send_unavailable))
             return
         }
-        val remoteInput = action.remoteInputs?.firstOrNull()
+        val remoteInput = action.remoteInputs?.firstOrNull { it.allowFreeFormInput }
+            ?: action.remoteInputs?.firstOrNull()
         if (remoteInput == null) {
-            copyToClipboard(text, "Direct send unavailable. Copied to clipboard.")
+            copyToClipboard(text, getString(R.string.dashboard_direct_send_unavailable))
             return
         }
         try {
@@ -383,14 +415,18 @@ class OverlayService : android.app.Service() {
                 )
             }
             action.actionIntent.send(this, 0, intent)
-            Toast.makeText(this, "Reply sent!", Toast.LENGTH_SHORT).show()
-            DirectReplyRegistry.remove(actionKey)
+            OutgoingMessageSuppressor.registerOutgoing(
+                packageName = chatMessage.appSource,
+                text = text,
+            )
+            Toast.makeText(this, getString(R.string.dashboard_reply_sent), Toast.LENGTH_SHORT).show()
+            chatMessage.replyActionKey?.let { DirectReplyRegistry.remove(it) }
             NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
             clearScrim()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) renderOverlay()
         } catch (e: PendingIntent.CanceledException) {
             Log.e(logTag, "Direct reply failed, falling back to clipboard", e)
-            copyToClipboard(text, "Send failed. Copied to clipboard.")
+            copyToClipboard(text, getString(R.string.dashboard_send_failed_copied))
         }
     }
 
@@ -399,15 +435,15 @@ class OverlayService : android.app.Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 overlayChannelId,
-                "AI Assistant Service",
+                getString(R.string.app_name),
                 NotificationManager.IMPORTANCE_LOW,
             )
             manager.createNotificationChannel(channel)
         }
         return NotificationCompat.Builder(this, overlayChannelId)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Smart Chat Assistant")
-            .setContentText("Listening for new messages")
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(R.string.notification_listener_description))
             .setOngoing(true)
             .build()
     }
@@ -422,12 +458,12 @@ class OverlayService : android.app.Service() {
         val message = rawMessage.orEmpty().lowercase()
         return when {
             message.contains("quota") || message.contains("rate") || message.contains("429") ->
-                "Cloud provider is rate-limited right now. Retrying will use fallback logic automatically."
+                getString(R.string.dashboard_user_safe_error_rate_limited)
             message.contains("cloud_error_both_providers_cooldown") ->
-                "Cloud providers are cooling down. On-device suggestions remain available."
+                getString(R.string.dashboard_user_safe_error_cooldown)
             message.contains("cloud_error_both_providers") ->
-                "Cloud providers are unavailable. On-device suggestions remain available."
-            else -> rawMessage ?: "Unable to generate suggestions right now."
+                getString(R.string.dashboard_user_safe_error_cloud_unavailable)
+            else -> getString(R.string.dashboard_user_safe_error_default)
         }
     }
 

@@ -1,7 +1,9 @@
 package com.example.ai_assis.domain.usecase
 
+import com.example.ai_assis.data.local.MediaReplyProvider
 import com.example.ai_assis.domain.model.ConversationContext
 import com.example.ai_assis.domain.model.HybridSuggestionResult
+import com.example.ai_assis.domain.model.MessageType
 import com.example.ai_assis.domain.model.Suggestion
 import com.example.ai_assis.domain.model.SuggestionSource
 import javax.inject.Inject
@@ -14,6 +16,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class GetHybridSuggestionsUseCase @Inject constructor(
     private val getOnDeviceSuggestionsUseCase: GetOnDeviceSuggestionsUseCase,
     private val getCloudSuggestionsUseCase: GetCloudSuggestionsUseCase,
+    private val mediaReplyProvider: MediaReplyProvider,
 ) {
     private val cacheMutex = Mutex()
     private val cloudCache = mutableMapOf<String, CacheEntry>()
@@ -21,6 +24,20 @@ class GetHybridSuggestionsUseCase @Inject constructor(
     private var cloudBlockedUntilMs = 0L
 
     suspend operator fun invoke(context: ConversationContext): Result<HybridSuggestionResult> {
+        if (context.messageType != MessageType.TEXT) {
+            val mediaSuggestions = mediaReplyProvider.getReplies(
+                messageType = context.messageType,
+                appPackage = context.appPackage,
+            )
+            return Result.success(
+                HybridSuggestionResult(
+                    suggestions = mediaSuggestions,
+                    source = SuggestionSource.ON_DEVICE,
+                    fallbackReason = "media_message",
+                ),
+            )
+        }
+
         val onDeviceResult = getOnDeviceSuggestionsUseCase(context)
         val onDeviceSuggestions = onDeviceResult.getOrDefault(emptyList())
         val fallbackReason = evaluateFallbackReason(context, onDeviceSuggestions)
@@ -167,7 +184,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
         const val minOnDeviceSuggestionCount = 2
         const val maxSuggestionChars = 90
         const val minConfidenceThreshold = 0.55
-        const val cloudTimeoutMs = 1_800L
+        const val cloudTimeoutMs = 7_000L
         const val cacheTtlMs = 10 * 60 * 1_000L
         const val circuitBreakerFailureThreshold = 3
         const val circuitBreakerCooldownMs = 5 * 60 * 1_000L

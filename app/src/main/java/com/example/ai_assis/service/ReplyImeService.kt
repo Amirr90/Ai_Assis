@@ -174,6 +174,16 @@ class ReplyImeService : InputMethodService() {
             ic.commitText(text, 1)
             ic.endBatchEdit()
         }
+        NotificationEventBus.chatHistory.value.firstOrNull()
+            ?.chatMessage
+            ?.appSource
+            ?.takeIf { it.isNotBlank() }
+            ?.let { packageName ->
+                OutgoingMessageSuppressor.registerOutgoing(
+                    packageName = packageName,
+                    text = text,
+                )
+            }
     }
 
     private fun buildChipBackground(): android.graphics.drawable.GradientDrawable {

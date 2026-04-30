@@ -41,11 +41,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import kotlinx.coroutines.delay
+import com.example.ai_assis.R
 import com.example.ai_assis.domain.model.appDisplayLabelFor
 import com.example.ai_assis.presentation.ui.components.AppSourceIcon
 import com.example.ai_assis.presentation.ui.components.SourceTab
@@ -53,6 +55,7 @@ import com.example.ai_assis.presentation.ui.components.SourceTabsRow
 import com.example.ai_assis.presentation.ui.components.appIconResFor
 import com.example.ai_assis.presentation.ui.components.defaultSourceTabs
 import com.example.ai_assis.presentation.ui.components.sourceTabFromKey
+import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.service.NotificationEventBus
 
 data class OverlayUiState(
@@ -73,7 +76,7 @@ fun BubbleContent(
     onClear: () -> Unit,
     onToggleUpdates: () -> Unit,
     onReplyClick: (String) -> Unit,
-    onDirectSend: (String, String) -> Unit,
+    onDirectSend: (String, ChatMessage) -> Unit,
     onRetry: () -> Boolean,
 ) {
     if (!uiState.isBubbleVisible) return
@@ -112,7 +115,7 @@ private fun ChatHeadBubble(
         modifier = Modifier
             .size(64.dp)
             .background(MaterialTheme.colorScheme.primary, CircleShape)
-            .clickable(onClick = onClick),
+            .clickable(onClickLabel = stringResource(R.string.dashboard_assistant_head_action), onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         if (isLoading) {
@@ -123,7 +126,7 @@ private fun ChatHeadBubble(
             )
         } else {
             Text(
-                text = "AI",
+                text = stringResource(R.string.dashboard_ai_short_label),
                 color = MaterialTheme.colorScheme.onPrimary,
                 style = MaterialTheme.typography.titleMedium,
             )
@@ -157,7 +160,7 @@ private fun ExpandedChatPanel(
     onClear: () -> Unit,
     onToggleUpdates: () -> Unit,
     onReplyClick: (String) -> Unit,
-    onDirectSend: (String, String) -> Unit,
+    onDirectSend: (String, ChatMessage) -> Unit,
     onRetry: () -> Boolean,
 ) {
     val listState = rememberLazyListState()
@@ -184,7 +187,7 @@ private fun ExpandedChatPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Smart Replies",
+                text = stringResource(R.string.dashboard_overlay_title),
                 color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleMedium,
             )
@@ -193,22 +196,30 @@ private fun ExpandedChatPanel(
                     if (updatesPaused) {
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
-                            contentDescription = "Resume updates",
+                            contentDescription = stringResource(R.string.dashboard_overlay_resume_updates),
                             tint = MaterialTheme.colorScheme.onSurface,
                         )
                     } else {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Pause updates",
+                            contentDescription = stringResource(R.string.dashboard_overlay_pause_updates),
                             tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
                 IconButton(onClick = onClear) {
-                    Icon(Icons.Default.Delete, contentDescription = "Clear", tint = MaterialTheme.colorScheme.onSurface)
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = stringResource(R.string.dashboard_overlay_clear),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
                 IconButton(onClick = onCollapse) {
-                    Icon(Icons.Default.Close, contentDescription = "Collapse", tint = MaterialTheme.colorScheme.onSurface)
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stringResource(R.string.dashboard_overlay_collapse),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
         }
@@ -228,7 +239,7 @@ private fun ExpandedChatPanel(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Generating reply…",
+                    text = stringResource(R.string.dashboard_overlay_generating_reply),
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -244,12 +255,12 @@ private fun ExpandedChatPanel(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = errorMessage,
+                    text = userSafeErrorText(errorMessage),
                     color = MaterialTheme.colorScheme.onErrorContainer,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    text = "Retry last request",
+                    text = stringResource(R.string.dashboard_retry_last_request),
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.clickable { onRetry() },
@@ -266,9 +277,9 @@ private fun ExpandedChatPanel(
         if (visibleItems.isEmpty() && !isLoading && errorMessage == null) {
             Text(
                 text = if (selectedTab == SourceTab.All) {
-                    "No suggestions yet. Open WhatsApp, Instagram, or LinkedIn and receive a message."
+                    stringResource(R.string.dashboard_overlay_no_suggestions_all)
                 } else {
-                    "No suggestions yet for ${selectedTab.title}."
+                    stringResource(R.string.dashboard_no_suggestions_for_source, selectedTab.title)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -305,7 +316,7 @@ private fun ExpandedChatPanel(
 private fun SuggestionCard(
     entry: NotificationEventBus.ChatSuggestionItem,
     onReplyClick: (String) -> Unit,
-    onDirectSend: (String, String) -> Unit,
+    onDirectSend: (String, ChatMessage) -> Unit,
 ) {
     var activeSendKey by remember(entry.id) { mutableStateOf<String?>(null) }
     var isMessageExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
@@ -344,14 +355,21 @@ private fun SuggestionCard(
         )
         if (isMessageOverflowing) {
             Text(
-                text = if (isMessageExpanded) "Show less" else "Show more",
+                text = if (isMessageExpanded) stringResource(R.string.dashboard_show_less) else stringResource(R.string.dashboard_show_more),
                 color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.clickable { isMessageExpanded = !isMessageExpanded },
             )
         }
         Text(
-            text = "Source: ${entry.source.name}${entry.fallbackReason?.let { " • ${toFallbackLabel(it)}" } ?: ""}",
+            text = stringResource(
+                R.string.dashboard_source_metadata,
+                entry.source.name,
+                buildMetadataSuffix(
+                    fallbackReason = entry.fallbackReason,
+                    isSummaryNotification = entry.chatMessage.isSummaryNotification,
+                ),
+            ),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
@@ -380,7 +398,7 @@ private fun SuggestionCard(
                         onClick = {
                             if (isSending) return@SmoothSendButton
                             activeSendKey = sendKey
-                            onDirectSend(reply, entry.chatMessage.replyActionKey)
+                            onDirectSend(reply, entry.chatMessage)
                         },
                     )
                     LaunchedEffect(isSending, sendKey) {
@@ -395,23 +413,47 @@ private fun SuggestionCard(
     }
 }
 
-private fun toFallbackLabel(rawReason: String): String {
+@Composable
+private fun fallbackLabel(rawReason: String): String {
     return when (rawReason) {
-        "cached" -> "cached cloud response"
-        "circuit_breaker_open" -> "cloud cooldown active"
-        "cloud_timeout" -> "cloud timeout"
-        "cloud_providers_cooldown" -> "cloud providers cooling down"
-        "cloud_rate_limited" -> "cloud rate-limited"
-        "cloud_empty" -> "cloud returned empty result"
-        "cloud_error_both_providers" -> "all cloud providers failed"
-        "cloud_error" -> "cloud request failed"
-        "high_quality_mode" -> "high quality mode"
-        "insufficient_count" -> "on-device count below threshold"
-        "length_over_limit" -> "on-device reply too long"
-        "blocked_content" -> "safety filtered"
-        "low_confidence" -> "on-device confidence too low"
-        "language_mismatch" -> "language mismatch"
-        else -> rawReason.replace('_', ' ')
+        "cached" -> stringResource(R.string.dashboard_fallback_cached)
+        "circuit_breaker_open" -> stringResource(R.string.dashboard_fallback_circuit_open)
+        "cloud_timeout" -> stringResource(R.string.dashboard_fallback_timeout)
+        "cloud_providers_cooldown" -> stringResource(R.string.dashboard_fallback_providers_cooldown)
+        "cloud_rate_limited" -> stringResource(R.string.dashboard_fallback_rate_limited)
+        "cloud_empty" -> stringResource(R.string.dashboard_fallback_empty)
+        "cloud_error_both_providers" -> stringResource(R.string.dashboard_fallback_both_failed)
+        "cloud_error" -> stringResource(R.string.dashboard_fallback_cloud_error)
+        "high_quality_mode" -> stringResource(R.string.dashboard_fallback_high_quality)
+        "insufficient_count" -> stringResource(R.string.dashboard_fallback_insufficient_count)
+        "length_over_limit" -> stringResource(R.string.dashboard_fallback_length_over_limit)
+        "blocked_content" -> stringResource(R.string.dashboard_fallback_blocked)
+        "low_confidence" -> stringResource(R.string.dashboard_fallback_low_confidence)
+        "language_mismatch" -> stringResource(R.string.dashboard_fallback_language_mismatch)
+        else -> stringResource(R.string.dashboard_fallback_applied)
+    }
+}
+
+@Composable
+private fun buildMetadataSuffix(
+    fallbackReason: String?,
+    isSummaryNotification: Boolean,
+): String {
+    val parts = buildList {
+        fallbackReason?.let { add(fallbackLabel(it)) }
+        if (isSummaryNotification) add(stringResource(R.string.dashboard_summary_tag))
+    }
+    return if (parts.isEmpty()) "" else stringResource(R.string.dashboard_fallback_suffix, parts.joinToString(" | "))
+}
+
+@Composable
+private fun userSafeErrorText(error: String?): String {
+    if (error.isNullOrBlank()) return stringResource(R.string.dashboard_user_safe_error_default)
+    val lowered = error.lowercase()
+    return when {
+        lowered.contains("provider") || lowered.contains("http") || lowered.contains("exception") || lowered.contains("timeout") ->
+            stringResource(R.string.dashboard_user_safe_error_default)
+        else -> error
     }
 }
 
@@ -433,20 +475,20 @@ private fun SmoothSendButton(
         enabled = !isSending,
         interactionSource = interactionSource,
         modifier = Modifier
-            .size(28.dp)
+            .size(40.dp)
             .scale(scale),
     ) {
         if (isSending) {
             CircularProgressIndicator(
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(16.dp),
                 strokeWidth = 2.dp,
             )
         } else {
             Icon(
                 imageVector = Icons.Default.Send,
-                contentDescription = "Send directly",
+                contentDescription = stringResource(R.string.dashboard_overlay_send_directly),
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(18.dp),
             )
         }
     }

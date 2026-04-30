@@ -5,4 +5,7 @@ data class ChatMessage(
     val message: String,
     val appSource: String,
     val replyActionKey: String? = null,
+    val isSummaryNotification: Boolean = false,
+    val messageType: MessageType = MessageType.TEXT,
+    val direction: MessageDirection = MessageDirection.INCOMING,
 )

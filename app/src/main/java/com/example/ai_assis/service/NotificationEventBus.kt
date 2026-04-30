@@ -7,12 +7,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicLong
 
 object NotificationEventBus {
     enum class OverlayMode { HEAD, PANEL }
 
     data class ChatSuggestionItem(
-        val id: Long = System.currentTimeMillis(),
+        val id: Long,
         val chatMessage: ChatMessage,
         val replies: List<String>,
         val source: SuggestionSource = SuggestionSource.ON_DEVICE,
@@ -59,6 +60,7 @@ object NotificationEventBus {
             topItem.chatMessage.sender == message.sender &&
             topItem.chatMessage.message == message.message &&
             topItem.chatMessage.appSource == message.appSource &&
+            topItem.chatMessage.isSummaryNotification == message.isSummaryNotification &&
             topItem.replies == replies &&
             (now - topItem.createdAtMs) <= duplicateSuggestionWindowMs
         ) {
@@ -67,18 +69,14 @@ object NotificationEventBus {
 
         val unreadBump = if (_metaState.value.mode == OverlayMode.HEAD) 1 else 0
         val newItem = ChatSuggestionItem(
+            id = nextItemId.getAndIncrement(),
             chatMessage = message,
             replies = replies,
             source = source,
             fallbackReason = fallbackReason,
             createdAtMs = now,
         )
-        _chatHistory.value = if (_metaState.value.mode == OverlayMode.PANEL) {
-            // Keep list stable while user is reading/scrolling the panel.
-            (_chatHistory.value + newItem).takeLast(20)
-        } else {
-            (listOf(newItem) + _chatHistory.value).take(20)
-        }
+        _chatHistory.value = (listOf(newItem) + _chatHistory.value).take(20)
         _metaState.value = _metaState.value.copy(
             unreadCount = _metaState.value.unreadCount + unreadBump,
             isLoading = false,
@@ -150,5 +148,6 @@ object NotificationEventBus {
         _chatHistory.value = _chatHistory.value.map { it.copy(isRead = true) }
     }
 
+    private val nextItemId = AtomicLong(1L)
     private const val duplicateSuggestionWindowMs = 4_000L
 }

@@ -16,6 +16,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 
 class OpenAiApiService @Inject constructor(
@@ -79,7 +80,7 @@ class OpenAiApiService @Inject constructor(
                 header(HttpHeaders.Authorization, "Bearer ${BuildConfig.OPENAI_KEY}")
                 setBody(
                     ReplyRequestDto(
-                        model = "gpt-4o-mini",
+                        model = "gpt-4.1-nano",
                         messages = listOf(
                             MessageDto(
                                 role = "system",
@@ -95,6 +96,9 @@ class OpenAiApiService @Inject constructor(
             val responseBody = runCatching { exception.response.bodyAsText() }.getOrDefault("<unable_to_read_body>")
             Log.e(logTag, "OpenAI HTTP error. status=$statusCode body=$responseBody")
             return fallbackReplies(message = message, languageHint = languageHint)
+        } catch (exception: CancellationException) {
+            Log.d(logTag, "OpenAI request cancelled: ${exception.message}")
+            throw exception
         } catch (throwable: Throwable) {
             Log.e(logTag, "OpenAI request failed. ${throwable.message}", throwable)
             return fallbackReplies(message = message, languageHint = languageHint)
@@ -105,6 +109,7 @@ class OpenAiApiService @Inject constructor(
             logTag,
             "OpenAI success response. status=${response.status.value} bodySnippet=${responseBody.toLogSnippet()}",
         )
+        Log.d(logTag, "OpenAI raw response body=$responseBody")
         val parsedResponse = runCatching { json.decodeFromString(ReplyResponseDto.serializer(), responseBody) }
             .getOrElse { parseError ->
                 Log.e(logTag, "OpenAI response parse failed. ${parseError.message}")
@@ -128,6 +133,7 @@ class OpenAiApiService @Inject constructor(
                 .map { line -> line.removePrefix("-").trim().replace(Regex("^\\d+[.)]\\s*"), "") }
                 .toList()
         }
+        Log.d(logTag, "OpenAI raw parsed candidates=$rawCandidates")
 
         val ranked = rawCandidates
             .asSequence()
@@ -145,7 +151,7 @@ class OpenAiApiService @Inject constructor(
             .take(3)
             .toList()
 
-        Log.d(logTag, "OpenAI parsed replies count=${ranked.size}")
+        Log.d(logTag, "OpenAI final ranked replies count=${ranked.size} replies=$ranked")
         return ranked.ifEmpty { fallbackReplies(message = message, languageHint = languageHint) }
     }
 

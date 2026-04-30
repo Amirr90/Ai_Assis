@@ -7,6 +7,7 @@ data class SuggestionsUiState(
     val senderName: String = "",
     val tone: SuggestionTone = SuggestionTone.CASUAL,
     val suggestions: List<SuggestionUiModel> = emptyList(),
+    val mediaTypeLabel: String? = null,
     val isLoading: Boolean = false,
     val source: SuggestionSourceUi = SuggestionSourceUi.ON_DEVICE,
     val errorMessage: String? = null,

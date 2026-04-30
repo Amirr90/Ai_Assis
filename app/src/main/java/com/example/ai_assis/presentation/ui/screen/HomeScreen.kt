@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.example.ai_assis.R
 import com.example.ai_assis.domain.model.ReplyTone
 import com.example.ai_assis.domain.model.appDisplayLabelFor
 import com.example.ai_assis.presentation.ui.components.AppSourceIcon
@@ -72,9 +73,12 @@ import com.example.ai_assis.presentation.viewmodel.DashboardEvent
 import com.example.ai_assis.presentation.viewmodel.HomeViewModel
 import com.example.ai_assis.service.DirectReplyRegistry
 import com.example.ai_assis.service.NotificationEventBus
+import com.example.ai_assis.service.OutgoingMessageSuppressor
+import com.example.ai_assis.util.DATA_USE_DISCLOSURE_URL
 import com.example.ai_assis.util.PRIVACY_POLICY_URL
 import com.example.ai_assis.util.PermissionUtils
 import com.example.ai_assis.util.openExternalUrl
+import androidx.compose.ui.res.stringResource
 
 @Composable
 fun HomeScreen(
@@ -154,8 +158,8 @@ fun HomeScreen(
 
         item {
             OutlinedButton(onClick = onOpenAppFilter, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Settings, contentDescription = "Monitored apps")
-                Text("  Monitored Apps")
+                Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.dashboard_monitored_apps))
+                Text("  ${stringResource(R.string.dashboard_monitored_apps)}")
             }
         }
 
@@ -165,15 +169,21 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = overlayMeta.isServiceRunning,
             ) {
-                Text("AI Suggestions")
+                Text(stringResource(R.string.dashboard_ai_suggestions))
             }
         }
 
         item {
             OutlinedButton(onClick = onOpenImeSettings, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Settings, contentDescription = "Enable AI keyboard")
-                Text("  Enable AI Keyboard (Beta)")
+                Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.dashboard_enable_ai_keyboard_beta))
+                Text("  ${stringResource(R.string.dashboard_enable_ai_keyboard_beta)}")
             }
+            Text(
+                text = stringResource(R.string.dashboard_enable_ai_keyboard_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
 
         item {
@@ -181,8 +191,19 @@ fun HomeScreen(
                 onClick = { openExternalUrl(context, PRIVACY_POLICY_URL) },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Privacy Policy")
+                Text(stringResource(R.string.dashboard_privacy_policy))
             }
+            TextButton(
+                onClick = { openExternalUrl(context, DATA_USE_DISCLOSURE_URL) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.dashboard_data_use_disclosure))
+            }
+            Text(
+                text = stringResource(R.string.dashboard_data_use_disclosure_summary),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         item {
@@ -191,19 +212,19 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Chat Window", style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(R.string.dashboard_chat_window), style = MaterialTheme.typography.titleLarge)
                 if (chatHistory.isNotEmpty()) {
                     IconButton(onClick = { viewModel.onEvent(DashboardEvent.ClearHistoryClicked) }) {
                         Icon(
                             Icons.Default.Delete,
-                            contentDescription = "Clear history",
+                            contentDescription = stringResource(R.string.dashboard_clear_history),
                             tint = MaterialTheme.colorScheme.error,
                         )
                     }
                 }
             }
             Text(
-                text = "Each incoming message shows its own suggested replies.",
+                text = stringResource(R.string.dashboard_chat_window_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -228,12 +249,12 @@ fun HomeScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            text = overlayMeta.errorMessage,
+                            text = userSafeErrorText(overlayMeta.errorMessage),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
                         Text(
-                            text = "Retry last request",
+                            text = stringResource(R.string.dashboard_retry_last_request),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable { NotificationEventBus.retryLastFailedRequest() },
@@ -242,11 +263,11 @@ fun HomeScreen(
                 } else {
                     Text(
                         text = if (overlayMeta.isLoading) {
-                            "Generating suggestions..."
+                            stringResource(R.string.dashboard_generating_suggestions)
                         } else if (selectedSourceTab == SourceTab.All) {
-                            "No suggestions yet. Enable the assistant, then receive a new message from a monitored app."
+                            stringResource(R.string.dashboard_no_suggestions_all)
                         } else {
-                            "No suggestions yet for ${selectedSourceTab.title}."
+                            stringResource(R.string.dashboard_no_suggestions_for_source, selectedSourceTab.title)
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -262,7 +283,44 @@ fun HomeScreen(
                 )
             }
         }
+        item {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.dashboard_coming_soon),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    DashboardBacklogLine(stringResource(R.string.dashboard_feature_voice_input))
+                    DashboardBacklogLine(stringResource(R.string.dashboard_feature_summarization))
+                    DashboardBacklogLine(stringResource(R.string.dashboard_feature_personalization))
+                    DashboardBacklogLine(stringResource(R.string.dashboard_feature_reply_later))
+                    DashboardBacklogLine(stringResource(R.string.dashboard_feature_notification_actions))
+                    DashboardBacklogLine(stringResource(R.string.dashboard_feature_widget))
+                    Text(
+                        text = stringResource(R.string.dashboard_backlog_cta),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
+}
+
+@Composable
+private fun DashboardBacklogLine(label: String) {
+    Text(
+        text = "- $label (${stringResource(R.string.dashboard_feature_coming_soon_suffix)})",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -291,7 +349,11 @@ private fun AssistantStatusCard(
                         ),
                 )
                 Text(
-                    text = if (isRunning) "  Assistant: Running" else "  Assistant: Stopped",
+                    text = if (isRunning) {
+                        "  ${stringResource(R.string.dashboard_assistant_running)}"
+                    } else {
+                        "  ${stringResource(R.string.dashboard_assistant_stopped)}"
+                    },
                     color = if (isRunning) successColor else MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
@@ -299,14 +361,14 @@ private fun AssistantStatusCard(
             }
             if (isRunning) {
                 Text(
-                    text = "Mode: ${mode.name} ? Unread: $unreadCount",
+                    text = stringResource(R.string.dashboard_mode_unread, mode.name, unreadCount),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onStart, enabled = !isRunning, modifier = Modifier.weight(1f)) {
-                    Text("Enable")
+                    Text(stringResource(R.string.dashboard_enable))
                 }
                 Button(
                     onClick = onStop,
@@ -314,7 +376,7 @@ private fun AssistantStatusCard(
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("Disable")
+                    Text(stringResource(R.string.dashboard_disable))
                 }
             }
         }
@@ -333,9 +395,13 @@ private fun PermissionStatusCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Permissions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            PermissionStatusRow("Notification Access", hasNotification, onOpenNotificationAccess)
-            PermissionStatusRow("Overlay Permission", hasOverlay, onOpenOverlayPermission)
+            Text(
+                stringResource(R.string.dashboard_permissions),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            PermissionStatusRow(stringResource(R.string.dashboard_permission_notification_access), hasNotification, onOpenNotificationAccess)
+            PermissionStatusRow(stringResource(R.string.dashboard_permission_overlay), hasOverlay, onOpenOverlayPermission)
         }
     }
 }
@@ -361,7 +427,7 @@ private fun PermissionStatusRow(label: String, isGranted: Boolean, onFix: () -> 
             )
         }
         if (!isGranted) {
-            TextButton(onClick = onFix) { Text("Fix", style = MaterialTheme.typography.labelSmall) }
+            TextButton(onClick = onFix) { Text(stringResource(R.string.dashboard_fix), style = MaterialTheme.typography.labelSmall) }
         }
     }
 }
@@ -373,7 +439,11 @@ private fun ToneSelectorCard(selectedTone: ReplyTone, onToneSelected: (ReplyTone
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Reply Tone", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                stringResource(R.string.dashboard_reply_tone),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -393,7 +463,11 @@ private fun ToneSelectorCard(selectedTone: ReplyTone, onToneSelected: (ReplyTone
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                     ) {
                         Text(
-                            text = if (isSelected) "? ${tone.displayName}" else tone.displayName,
+                            text = if (isSelected) {
+                                stringResource(R.string.dashboard_tone_selected, tone.displayName)
+                            } else {
+                                tone.displayName
+                            },
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -446,7 +520,14 @@ private fun MessageSuggestionCard(
             color = MaterialTheme.colorScheme.onSurface,
         )
         Text(
-            text = "Source: ${item.source.name}${item.fallbackReason?.let { " ? ${toFallbackLabel(it)}" } ?: ""}",
+            text = stringResource(
+                R.string.dashboard_source_metadata,
+                item.source.name,
+                buildMetadataSuffix(
+                    fallbackReason = item.fallbackReason,
+                    isSummaryNotification = item.chatMessage.isSummaryNotification,
+                ),
+            ),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -471,37 +552,61 @@ private fun MessageSuggestionCard(
                     )
                 }
                 TextButton(onClick = { onSendReply(reply, item.chatMessage.replyActionKey) }) {
-                    Text("Send")
+                    Text(stringResource(R.string.dashboard_reply_send))
                 }
             }
         }
     }
 }
 
-private fun toFallbackLabel(rawReason: String): String {
+@Composable
+private fun fallbackLabel(rawReason: String): String {
     return when (rawReason) {
-        "cached" -> "cached cloud response"
-        "circuit_breaker_open" -> "cloud cooldown active"
-        "cloud_timeout" -> "cloud timeout"
-        "cloud_providers_cooldown" -> "cloud providers cooling down"
-        "cloud_rate_limited" -> "cloud rate-limited"
-        "cloud_empty" -> "cloud returned empty result"
-        "cloud_error_both_providers" -> "all cloud providers failed"
-        "cloud_error" -> "cloud request failed"
-        "high_quality_mode" -> "high quality mode"
-        "insufficient_count" -> "on-device count below threshold"
-        "length_over_limit" -> "on-device reply too long"
-        "blocked_content" -> "safety filtered"
-        "low_confidence" -> "on-device confidence too low"
-        "language_mismatch" -> "language mismatch"
-        else -> rawReason.replace('_', ' ')
+        "cached" -> stringResource(R.string.dashboard_fallback_cached)
+        "circuit_breaker_open" -> stringResource(R.string.dashboard_fallback_circuit_open)
+        "cloud_timeout" -> stringResource(R.string.dashboard_fallback_timeout)
+        "cloud_providers_cooldown" -> stringResource(R.string.dashboard_fallback_providers_cooldown)
+        "cloud_rate_limited" -> stringResource(R.string.dashboard_fallback_rate_limited)
+        "cloud_empty" -> stringResource(R.string.dashboard_fallback_empty)
+        "cloud_error_both_providers" -> stringResource(R.string.dashboard_fallback_both_failed)
+        "cloud_error" -> stringResource(R.string.dashboard_fallback_cloud_error)
+        "high_quality_mode" -> stringResource(R.string.dashboard_fallback_high_quality)
+        "insufficient_count" -> stringResource(R.string.dashboard_fallback_insufficient_count)
+        "length_over_limit" -> stringResource(R.string.dashboard_fallback_length_over_limit)
+        "blocked_content" -> stringResource(R.string.dashboard_fallback_blocked)
+        "low_confidence" -> stringResource(R.string.dashboard_fallback_low_confidence)
+        "language_mismatch" -> stringResource(R.string.dashboard_fallback_language_mismatch)
+        else -> stringResource(R.string.dashboard_fallback_applied)
+    }
+}
+
+@Composable
+private fun buildMetadataSuffix(
+    fallbackReason: String?,
+    isSummaryNotification: Boolean,
+): String {
+    val parts = buildList {
+        fallbackReason?.let { add(fallbackLabel(it)) }
+        if (isSummaryNotification) add(stringResource(R.string.dashboard_summary_tag))
+    }
+    return if (parts.isEmpty()) "" else stringResource(R.string.dashboard_fallback_suffix, parts.joinToString(" | "))
+}
+
+@Composable
+private fun userSafeErrorText(error: String?): String {
+    if (error.isNullOrBlank()) return stringResource(R.string.dashboard_user_safe_error_default)
+    val lowered = error.lowercase()
+    return when {
+        lowered.contains("provider") || lowered.contains("http") || lowered.contains("exception") || lowered.contains("timeout") ->
+            stringResource(R.string.dashboard_user_safe_error_default)
+        else -> error
     }
 }
 
 private fun copyReply(context: Context, reply: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboard.setPrimaryClip(ClipData.newPlainText("reply", reply))
-    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, context.getString(R.string.dashboard_copied_to_clipboard), Toast.LENGTH_SHORT).show()
 }
 
 private fun sendDirectReply(context: Context, reply: String, actionKey: String?) {
@@ -514,7 +619,8 @@ private fun sendDirectReply(context: Context, reply: String, actionKey: String?)
         copyReply(context, reply)
         return
     }
-    val remoteInput = action.remoteInputs?.firstOrNull()
+    val remoteInput = action.remoteInputs?.firstOrNull { it.allowFreeFormInput }
+        ?: action.remoteInputs?.firstOrNull()
     if (remoteInput == null) {
         copyReply(context, reply)
         return
@@ -529,7 +635,12 @@ private fun sendDirectReply(context: Context, reply: String, actionKey: String?)
             )
         }
         action.actionIntent.send(context, 0, intent)
-        Toast.makeText(context, "Reply sent!", Toast.LENGTH_SHORT).show()
+        actionKey.substringBefore('_', missingDelimiterValue = "")
+            .takeIf { it.isNotBlank() }
+            ?.let { packageName ->
+                OutgoingMessageSuppressor.registerOutgoing(packageName = packageName, text = reply)
+            }
+        Toast.makeText(context, context.getString(R.string.dashboard_reply_sent), Toast.LENGTH_SHORT).show()
         DirectReplyRegistry.remove(actionKey)
     } catch (_: PendingIntent.CanceledException) {
         copyReply(context, reply)

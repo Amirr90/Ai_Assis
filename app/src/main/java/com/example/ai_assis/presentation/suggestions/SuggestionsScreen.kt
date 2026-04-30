@@ -61,6 +61,12 @@ fun SuggestionsScreen(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
+            uiState.mediaTypeLabel?.let { mediaLabel ->
+                AssistChip(
+                    onClick = {},
+                    label = { Text(mediaLabel) },
+                )
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ReplyTone.entries.forEach { replyTone ->
