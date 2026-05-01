@@ -7,11 +7,14 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -39,7 +42,16 @@ import dagger.hilt.android.AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(
+                scrim = Color(0xFFF2F2F2).toArgb(),
+                darkScrim = Color(0xFF1F1F1F).toArgb(),
+            ),
+            navigationBarStyle = SystemBarStyle.light(
+                scrim = Color(0xFFF2F2F2).toArgb(),
+                darkScrim = Color(0xFF1F1F1F).toArgb(),
+            ),
+        )
         setContent {
             AI_AssisTheme {
                 AppNav()

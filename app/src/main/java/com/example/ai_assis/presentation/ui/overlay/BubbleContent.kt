@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -85,6 +86,7 @@ fun BubbleContent(
     onToggleUpdates: () -> Unit,
     onReplyClick: (String) -> Unit,
     onDirectSend: (String, ChatMessage) -> Unit,
+    onRegenerateSuggestion: (ChatMessage) -> Boolean,
     onRetry: () -> Boolean,
 ) {
     if (!uiState.isBubbleVisible) return
@@ -107,6 +109,7 @@ fun BubbleContent(
                 onToggleUpdates = onToggleUpdates,
                 onReplyClick = onReplyClick,
                 onDirectSend = onDirectSend,
+                onRegenerateSuggestion = onRegenerateSuggestion,
                 onRetry = onRetry,
             )
         }
@@ -169,6 +172,7 @@ private fun ExpandedChatPanel(
     onToggleUpdates: () -> Unit,
     onReplyClick: (String) -> Unit,
     onDirectSend: (String, ChatMessage) -> Unit,
+    onRegenerateSuggestion: (ChatMessage) -> Boolean,
     onRetry: () -> Boolean,
 ) {
     val listState = rememberLazyListState()
@@ -320,8 +324,10 @@ private fun ExpandedChatPanel(
             ) { entry ->
                 SuggestionCard(
                     entry = entry,
+                    isLoading = isLoading,
                     onReplyClick = onReplyClick,
                     onDirectSend = onDirectSend,
+                    onRegenerateSuggestion = onRegenerateSuggestion,
                 )
             }
         }
@@ -331,8 +337,10 @@ private fun ExpandedChatPanel(
 @Composable
 private fun SuggestionCard(
     entry: NotificationEventBus.ChatSuggestionItem,
+    isLoading: Boolean,
     onReplyClick: (String) -> Unit,
     onDirectSend: (String, ChatMessage) -> Unit,
+    onRegenerateSuggestion: (ChatMessage) -> Boolean,
 ) {
     var activeSendKey by remember(entry.id) { mutableStateOf<String?>(null) }
     var isMessageExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
@@ -382,18 +390,39 @@ private fun SuggestionCard(
                 modifier = Modifier.clickable { isMessageExpanded = !isMessageExpanded },
             )
         }
-        Text(
-            text = stringResource(
-                R.string.dashboard_source_metadata,
-                entry.source.name,
-                buildMetadataSuffix(
-                    fallbackReason = entry.fallbackReason,
-                    isSummaryNotification = entry.chatMessage.isSummaryNotification,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(
+                    R.string.dashboard_source_metadata,
+                    entry.source.name,
+                    buildMetadataSuffix(
+                        fallbackReason = entry.fallbackReason,
+                        isSummaryNotification = entry.chatMessage.isSummaryNotification,
+                    ),
                 ),
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall,
-        )
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f),
+            )
+            if (entry.fallbackReason != null) {
+                SmallOverlayIconButton(
+                    onClick = { onRegenerateSuggestion(entry.chatMessage) },
+                    enabled = !isLoading,
+                    buttonSize = 28,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = stringResource(R.string.dashboard_retry_last_request),
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+        }
         entry.replies.forEach { reply ->
             val isEditingThisReply = editableReply == reply
             val replyRowShape = RoundedCornerShape(10.dp)
@@ -619,12 +648,13 @@ private fun SmallOverlayIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    buttonSize: Int = 40,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable () -> Unit,
 ) {
     Box(
         modifier = modifier
-            .size(40.dp)
+            .size(buttonSize.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.secondaryContainer)
             .clickable(

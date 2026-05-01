@@ -295,6 +295,7 @@ class OverlayService : android.app.Service() {
                         onToggleUpdates = { NotificationEventBus.togglePaused() },
                         onReplyClick = ::copyToClipboard,
                         onDirectSend = ::sendDirectReply,
+                        onRegenerateSuggestion = { message -> NotificationEventBus.regenerateForMessage(message) },
                         onRetry = { NotificationEventBus.retryLastFailedRequest() },
                     )
                 }
