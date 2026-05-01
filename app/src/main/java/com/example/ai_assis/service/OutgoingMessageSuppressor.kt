@@ -2,12 +2,21 @@ package com.example.ai_assis.service
 
 internal object OutgoingMessageSuppressor {
     private val recentOutgoingMessages = LinkedHashMap<String, Long>()
+    @Volatile
+    private var lastSentMessage: String? = null
+    @Volatile
+    private var lastSentTimestamp: Long = 0L
 
     fun registerOutgoing(
         packageName: String,
         text: String,
         nowMs: Long = System.currentTimeMillis(),
     ) {
+        val normalizedOriginal = normalize(text)
+        if (normalizedOriginal.isNotBlank()) {
+            lastSentMessage = normalizedOriginal
+            lastSentTimestamp = nowMs
+        }
         val variants = normalizedVariants(text)
         if (variants.isEmpty()) return
         synchronized(recentOutgoingMessages) {
@@ -37,6 +46,16 @@ internal object OutgoingMessageSuppressor {
             }
             return false
         }
+    }
+
+    fun isRecentSelfEcho(
+        text: String,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Boolean {
+        val normalizedIncoming = normalize(text)
+        if (normalizedIncoming.isBlank()) return false
+        val message = lastSentMessage ?: return false
+        return normalizedIncoming == message && (nowMs - lastSentTimestamp) < selfEchoWindowMs
     }
 
     private fun key(packageName: String, normalizedMessage: String): String = "$packageName|$normalizedMessage"
@@ -72,5 +91,6 @@ internal object OutgoingMessageSuppressor {
     }
 
     private const val suppressWindowMs = 10_000L
+    private const val selfEchoWindowMs = 5_000L
     private const val maxEntries = 80
 }

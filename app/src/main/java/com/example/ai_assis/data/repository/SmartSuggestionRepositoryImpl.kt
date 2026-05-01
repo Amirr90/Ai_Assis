@@ -10,6 +10,7 @@ import com.example.ai_assis.data.remote.dto.SuggestionGenerateRequestDto
 import com.example.ai_assis.data.mapper.SuggestionMapper
 import com.example.ai_assis.domain.model.ReplyTone
 import com.example.ai_assis.domain.model.ConversationContext
+import com.example.ai_assis.domain.model.ReplyLength
 import com.example.ai_assis.domain.model.Suggestion
 import com.example.ai_assis.domain.model.SuggestionSource
 import com.example.ai_assis.domain.model.SuggestionTone
@@ -136,11 +137,13 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
                             compiledConversationContext = compiledConversationContext,
                             tone = context.tone.name,
                             languageHint = context.languageHint,
-                            maxSuggestions = 3,
+                            maxSuggestions = maxSuggestionCount(context.replyLength),
                             promptPolicy = PromptPolicyDto(),
                         ),
                     )
-                    suggestionMapper.fromCloudResponse(response)
+                    suggestionMapper.fromCloudResponse(response).map { suggestion ->
+                        suggestion.copy(text = suggestion.text.take(context.replyLength.maxChars))
+                    }
                 }
             }.take(3)
             Result.success(suggestions)
@@ -190,6 +193,14 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
             message.contains("timeout") -> "timeout"
             else -> "generic"
         }
+    }
+}
+
+private fun maxSuggestionCount(length: ReplyLength): Int {
+    return when (length) {
+        ReplyLength.SHORT -> 3
+        ReplyLength.MEDIUM -> 3
+        ReplyLength.DETAILED -> 4
     }
 }
 

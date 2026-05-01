@@ -8,6 +8,8 @@ data class ConversationContext(
     val messageType: MessageType = MessageType.TEXT,
     val recentMessages: List<String>,
     val tone: SuggestionTone,
+    val replyLength: ReplyLength = ReplyLength.MEDIUM,
+    val aiEnabled: Boolean = true,
     val languageHint: String? = null,
     val styleHint: String? = null,
     val highQualityMode: Boolean = false,

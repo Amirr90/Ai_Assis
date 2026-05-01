@@ -23,14 +23,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,9 +40,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -175,6 +183,14 @@ private fun ExpandedChatPanel(
         }
     }
     val visibleItems = remember(filteredItems) { filteredItems.take(12) }
+    val configuration = LocalConfiguration.current
+    // Cap the suggestions list at the smaller of 420dp and 60% of screen height
+    // so the panel fits within the device viewport even on short screens or
+    // when the IME is open.
+    val listMaxHeight = remember(configuration.screenHeightDp) {
+        val sixtyPercent = (configuration.screenHeightDp * 0.6f).dp
+        if (sixtyPercent < 420.dp) sixtyPercent else 420.dp
+    }
     Column(
         modifier = Modifier
             .background(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp))
@@ -292,7 +308,7 @@ private fun ExpandedChatPanel(
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .heightIn(max = 420.dp)
+                .heightIn(max = listMaxHeight)
                 .fillMaxWidth(),
             userScrollEnabled = true,
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -321,10 +337,16 @@ private fun SuggestionCard(
     var activeSendKey by remember(entry.id) { mutableStateOf<String?>(null) }
     var isMessageExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
     var isMessageOverflowing by rememberSaveable(entry.id) { mutableStateOf(false) }
+    var editableReply by remember(entry.id) { mutableStateOf<String?>(null) }
+    var editedReplyText by remember(entry.id) { mutableStateOf("") }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val cardShape = RoundedCornerShape(12.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .clip(cardShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), cardShape)
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -346,10 +368,9 @@ private fun SuggestionCard(
             maxLines = if (isMessageExpanded) Int.MAX_VALUE else 3,
             overflow = TextOverflow.Ellipsis,
             onTextLayout = { layoutResult ->
-                isMessageOverflowing = if (isMessageExpanded) {
-                    true
-                } else {
-                    layoutResult.hasVisualOverflow
+                val next = if (isMessageExpanded) true else layoutResult.hasVisualOverflow
+                if (next != isMessageOverflowing) {
+                    isMessageOverflowing = next
                 }
             },
         )
@@ -374,11 +395,13 @@ private fun SuggestionCard(
             style = MaterialTheme.typography.labelSmall,
         )
         entry.replies.forEach { reply ->
+            val isEditingThisReply = editableReply == reply
+            val replyRowShape = RoundedCornerShape(10.dp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp))
-                    .clickable { onReplyClick(reply) }
+                    .clip(replyRowShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer, replyRowShape)
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -387,10 +410,24 @@ private fun SuggestionCard(
                     text = reply,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onReplyClick(reply) },
                 )
+                Spacer(Modifier.width(6.dp))
+                SmallOverlayIconButton(
+                    onClick = {
+                        editableReply = reply
+                        editedReplyText = reply
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = stringResource(R.string.dashboard_overlay_edit_suggestion),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
                 if (entry.chatMessage.replyActionKey != null) {
-                    Spacer(Modifier.width(6.dp))
                     val sendKey = "${entry.id}:$reply"
                     val isSending = activeSendKey == sendKey
                     SmoothSendButton(
@@ -405,6 +442,91 @@ private fun SuggestionCard(
                         if (isSending) {
                             delay(700)
                             if (activeSendKey == sendKey) activeSendKey = null
+                        }
+                    }
+                }
+            }
+            if (isEditingThisReply) {
+                val canSubmit = editedReplyText.trim().isNotEmpty()
+                val focusRequester = remember(reply) { FocusRequester() }
+                LaunchedEffect(reply) {
+                    focusRequester.requestFocus()
+                    keyboardController?.show()
+                }
+                val editorShape = RoundedCornerShape(10.dp)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(editorShape)
+                        .background(MaterialTheme.colorScheme.surface, editorShape)
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    OutlinedTextField(
+                        value = editedReplyText,
+                        onValueChange = { editedReplyText = it },
+                        singleLine = false,
+                        maxLines = 4,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            onClick = {
+                                keyboardController?.hide()
+                                focusManager.clearFocus(force = true)
+                                editableReply = null
+                            },
+                        ) {
+                            Text(text = stringResource(R.string.dashboard_cancel))
+                        }
+                        TextButton(
+                            onClick = {
+                                val finalText = editedReplyText.trim()
+                                onReplyClick(finalText)
+                                keyboardController?.hide()
+                                focusManager.clearFocus(force = true)
+                                editableReply = null
+                            },
+                            enabled = canSubmit,
+                        ) {
+                            Text(text = stringResource(R.string.dashboard_overlay_copy_edited))
+                        }
+                        if (entry.chatMessage.replyActionKey != null) {
+                            val sendEditedKey = "${entry.id}:edited:$reply"
+                            val isSendingEdited = activeSendKey == sendEditedKey
+                            TextButton(
+                                onClick = {
+                                    if (isSendingEdited) return@TextButton
+                                    val finalText = editedReplyText.trim()
+                                    activeSendKey = sendEditedKey
+                                    onDirectSend(finalText, entry.chatMessage)
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus(force = true)
+                                    editableReply = null
+                                },
+                                enabled = canSubmit && !isSendingEdited,
+                            ) {
+                                if (isSendingEdited) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    Text(text = stringResource(R.string.dashboard_overlay_send_edited))
+                                }
+                            }
+                            LaunchedEffect(isSendingEdited, sendEditedKey) {
+                                if (isSendingEdited) {
+                                    delay(700)
+                                    if (activeSendKey == sendEditedKey) activeSendKey = null
+                                }
+                            }
                         }
                     }
                 }
@@ -470,13 +592,11 @@ private fun SmoothSendButton(
         label = "sendButtonScale",
     )
 
-    FilledTonalIconButton(
+    SmallOverlayIconButton(
         onClick = onClick,
         enabled = !isSending,
         interactionSource = interactionSource,
-        modifier = Modifier
-            .size(40.dp)
-            .scale(scale),
+        modifier = Modifier.scale(scale),
     ) {
         if (isSending) {
             CircularProgressIndicator(
@@ -491,6 +611,31 @@ private fun SmoothSendButton(
                 modifier = Modifier.size(18.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun SmallOverlayIconButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
     }
 }
 

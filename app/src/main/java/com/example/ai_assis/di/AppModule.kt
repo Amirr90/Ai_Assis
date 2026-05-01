@@ -1,6 +1,7 @@
 package com.example.ai_assis.di
 
 import com.example.ai_assis.data.local.MonitoredAppsDataStore
+import com.example.ai_assis.data.local.FeaturePreferencesDataStore
 import com.example.ai_assis.data.local.ToneDataStore
 import com.example.ai_assis.data.remote.OpenAiApiService
 import com.example.ai_assis.data.remote.SuggestionApiService
@@ -9,6 +10,8 @@ import com.example.ai_assis.data.repository.SmartSuggestionRepositoryImpl
 import com.example.ai_assis.domain.repository.MonitoredAppsRepository
 import com.example.ai_assis.domain.repository.OpenAiRepository
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
+import com.example.ai_assis.domain.repository.FeaturePreferencesRepository
+import com.example.ai_assis.domain.repository.TemplateRepository
 import com.example.ai_assis.domain.repository.ToneRepository
 import dagger.Module
 import dagger.Provides
@@ -54,4 +57,16 @@ object AppModule {
     fun provideMonitoredAppsRepository(
         monitoredAppsDataStore: MonitoredAppsDataStore,
     ): MonitoredAppsRepository = monitoredAppsDataStore
+
+    @Provides
+    @Singleton
+    fun provideFeaturePreferencesRepository(
+        featurePreferencesDataStore: FeaturePreferencesDataStore,
+    ): FeaturePreferencesRepository = featurePreferencesDataStore
+
+    @Provides
+    @Singleton
+    fun provideTemplateRepository(
+        featurePreferencesDataStore: FeaturePreferencesDataStore,
+    ): TemplateRepository = featurePreferencesDataStore
 }

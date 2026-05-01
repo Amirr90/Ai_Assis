@@ -41,8 +41,11 @@ object NotificationEventBus {
     private val _metaState = MutableStateFlow(OverlayMetaState())
     val metaState: StateFlow<OverlayMetaState> = _metaState.asStateFlow()
     private var lastFailedMessage: ChatMessage? = null
+    private var lastRequest: ChatMessage? = null
+    private var lastRegenerateAtMs: Long = 0L
 
     fun tryEmit(message: ChatMessage) {
+        lastRequest = message
         _events.tryEmit(message)
     }
 
@@ -144,10 +147,26 @@ object NotificationEventBus {
         return true
     }
 
+    fun regenerateLastRequest(): Boolean {
+        val message = lastRequest ?: return false
+        return regenerateForMessage(message)
+    }
+
+    fun regenerateForMessage(message: ChatMessage): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastRegenerateAtMs < regenerateCooldownMs) return false
+        lastRegenerateAtMs = now
+        lastRequest = message
+        _metaState.value = _metaState.value.copy(isLoading = true, errorMessage = null, isBubbleVisible = true)
+        _events.tryEmit(message)
+        return true
+    }
+
     private fun markAllAsRead() {
         _chatHistory.value = _chatHistory.value.map { it.copy(isRead = true) }
     }
 
     private val nextItemId = AtomicLong(1L)
     private const val duplicateSuggestionWindowMs = 4_000L
+    private const val regenerateCooldownMs = 1_500L
 }

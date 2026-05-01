@@ -2,6 +2,7 @@ package com.example.ai_assis.domain.usecase
 
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.domain.model.ConversationContext
+import com.example.ai_assis.domain.model.ReplyLength
 import com.example.ai_assis.domain.model.SuggestionTone
 import java.util.Locale
 import javax.inject.Inject
@@ -13,6 +14,8 @@ class BuildConversationContextUseCase @Inject constructor() {
         recentMessages: List<String>,
         styleHint: String? = null,
         highQualityMode: Boolean = false,
+        replyLength: ReplyLength = ReplyLength.MEDIUM,
+        aiEnabled: Boolean = true,
     ): ConversationContext {
         val normalizedRecent = recentMessages
             .map { it.trim() }
@@ -26,6 +29,8 @@ class BuildConversationContextUseCase @Inject constructor() {
             messageType = message.messageType,
             recentMessages = normalizedRecent,
             tone = tone,
+            replyLength = replyLength,
+            aiEnabled = aiEnabled,
             languageHint = detectLanguageHint(message.message),
             styleHint = styleHint,
             highQualityMode = highQualityMode,

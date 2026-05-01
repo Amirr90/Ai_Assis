@@ -21,6 +21,8 @@ private fun ReplyTone.toSuggestionTone(): SuggestionTone {
     return when (this) {
         ReplyTone.CASUAL -> SuggestionTone.CASUAL
         ReplyTone.PROFESSIONAL -> SuggestionTone.PROFESSIONAL
+        ReplyTone.FLIRTY -> SuggestionTone.CASUAL
+        ReplyTone.ANGRY -> SuggestionTone.PROFESSIONAL
         ReplyTone.FUNNY -> SuggestionTone.HUMOROUS
         ReplyTone.SHORT -> SuggestionTone.SHORT
     }

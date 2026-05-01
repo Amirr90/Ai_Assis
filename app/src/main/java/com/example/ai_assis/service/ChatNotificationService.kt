@@ -59,6 +59,15 @@ class ChatNotificationService : NotificationListenerService() {
         )
         val text = parsedContent.messageText
         if (text.isBlank()) return
+        val title = extras.getCharSequence("android.title")?.toString().orEmpty().trim()
+        if (title.equals("You", ignoreCase = true)) {
+            Log.d(logTag, "Suppressed notification reason=self_title_you package=${sbn.packageName}")
+            return
+        }
+        if (OutgoingMessageSuppressor.isRecentSelfEcho(text)) {
+            Log.d(logTag, "Suppressed notification reason=recent_self_echo package=${sbn.packageName}")
+            return
+        }
         val messageType = MessageTypeDetector.detect(
             packageName = sbn.packageName,
             messageText = text,

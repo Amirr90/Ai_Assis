@@ -39,12 +39,16 @@ import com.example.ai_assis.R
 import com.example.ai_assis.data.local.ConversationCacheDataSource
 import com.example.ai_assis.data.local.SenderStyleMemoryDataSource
 import com.example.ai_assis.domain.model.MessageDirection
+import com.example.ai_assis.domain.repository.FeaturePreferencesRepository
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
 import com.example.ai_assis.domain.usecase.BuildConversationContextUseCase
+import com.example.ai_assis.domain.usecase.BuildContextMemoryUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
+import com.example.ai_assis.domain.usecase.ResolveReplyPolicyUseCase
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.presentation.ui.overlay.BubbleContent
 import com.example.ai_assis.presentation.ui.overlay.OverlayUiState
+import com.example.ai_assis.ui.theme.AI_AssisTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +79,15 @@ class OverlayService : android.app.Service() {
     @Inject
     lateinit var getHybridSuggestionsUseCase: GetHybridSuggestionsUseCase
 
+    @Inject
+    lateinit var featurePreferencesRepository: FeaturePreferencesRepository
+
+    @Inject
+    lateinit var resolveReplyPolicyUseCase: ResolveReplyPolicyUseCase
+
+    @Inject
+    lateinit var buildContextMemoryUseCase: BuildContextMemoryUseCase
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var windowManager: WindowManager
     private lateinit var overlayOwner: OverlayViewTreeOwner
@@ -82,6 +95,13 @@ class OverlayService : android.app.Service() {
     private lateinit var overlayParams: WindowManager.LayoutParams
     private var bubbleView: ComposeView? = null
     private var scrimView: View? = null
+
+    // Position of the draggable chat-head bubble in HEAD mode. Kept separate from
+    // overlayParams.x/y because the expanded PANEL is anchored independently
+    // (centered, top-aligned) so its content does not overflow off-screen and
+    // accidental drags during list-scroll cannot push it out of the touchable area.
+    private var bubbleX: Int = 0
+    private var bubbleY: Int = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -97,6 +117,17 @@ class OverlayService : android.app.Service() {
             createOverlayIfPermitted()
         }
         observeMessages()
+        observeMainAppForegroundForOverlayLayout()
+    }
+
+    private fun observeMainAppForegroundForOverlayLayout() {
+        serviceScope.launch {
+            MainAppForegroundTracker.mainAppForeground.collect {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bubbleView != null) {
+                    renderOverlay()
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -131,8 +162,13 @@ class OverlayService : android.app.Service() {
                     Log.d(logTag, "Suggestion fetch stage=request_context requestId=$requestId")
                     conversationCacheDataSource.appendMessage(event)
                     val tone = smartSuggestionRepository.observeTone().first()
+                    val aiEnabled = featurePreferencesRepository.aiEnabledFlow.first()
+                    val globalLength = featurePreferencesRepository.replyLengthFlow.first()
+                    val effectiveTone = resolveReplyPolicyUseCase.resolveTone(event.appSource, tone.toReplyTone())
+                    val effectiveLength = resolveReplyPolicyUseCase.resolveLength(event.appSource, globalLength)
                     senderStyleMemoryDataSource.rememberStyle(event.appSource, event.sender, tone)
                     val recentMessages = conversationCacheDataSource.recentMessages(event.appSource, event.sender)
+                    val contextMemory = buildContextMemoryUseCase(event, recentMessages)
                     val styleHint = senderStyleMemoryDataSource.getStyleHint(event.appSource, event.sender)
                     Log.d(
                         logTag,
@@ -140,10 +176,12 @@ class OverlayService : android.app.Service() {
                     )
                     val context = buildConversationContextUseCase(
                         message = event,
-                        tone = tone,
-                        recentMessages = recentMessages,
+                        tone = effectiveTone.toSuggestionTone(),
+                        recentMessages = contextMemory,
                         styleHint = styleHint,
                         highQualityMode = true,
+                        replyLength = effectiveLength,
+                        aiEnabled = aiEnabled,
                     )
                     Log.d(logTag, "Suggestion fetch stage=hybrid_invoke requestId=$requestId")
                     getHybridSuggestionsUseCase(context).getOrThrow()
@@ -204,17 +242,21 @@ class OverlayService : android.app.Service() {
         val defaultX = (metrics.widthPixels - 84.dpToPx()).coerceAtLeast(marginPx)
         val defaultY = (metrics.heightPixels - 180.dpToPx()).coerceAtLeast(marginPx)
 
+        bubbleX = prefs.getInt("overlay_x", defaultX)
+        bubbleY = prefs.getInt("overlay_y", defaultY)
+
         overlayParams = WindowManager.LayoutParams(
             1,
             1,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = prefs.getInt("overlay_x", defaultX)
-            y = prefs.getInt("overlay_y", defaultY)
+            x = bubbleX
+            y = bubbleY
         }
 
         bubbleView = ComposeView(this).apply {
@@ -222,38 +264,40 @@ class OverlayService : android.app.Service() {
             setViewTreeSavedStateRegistryOwner(overlayOwner)
             setViewTreeViewModelStoreOwner(overlayOwner)
             setContent {
-                val meta by NotificationEventBus.metaState.collectAsState()
-                val items by NotificationEventBus.chatHistory.collectAsState()
-                BubbleContent(
-                    uiState = OverlayUiState(
-                        mode = meta.mode,
-                        unreadCount = meta.unreadCount,
-                        updatesPaused = meta.updatesPaused,
-                        isLoading = meta.isLoading,
-                        errorMessage = meta.errorMessage,
-                        isBubbleVisible = meta.isBubbleVisible,
-                        items = items,
-                    ),
-                    onHeadClick = {
-                        NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
-                        renderOverlay()
-                    },
-                    onCollapse = {
-                        NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
-                        clearScrim()
-                        renderOverlay()
-                    },
-                    onClear = {
-                        NotificationEventBus.clearHistory()
-                        NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
-                        clearScrim()
-                        renderOverlay()
-                    },
-                    onToggleUpdates = { NotificationEventBus.togglePaused() },
-                    onReplyClick = ::copyToClipboard,
-                    onDirectSend = ::sendDirectReply,
-                    onRetry = { NotificationEventBus.retryLastFailedRequest() },
-                )
+                AI_AssisTheme {
+                    val meta by NotificationEventBus.metaState.collectAsState()
+                    val items by NotificationEventBus.chatHistory.collectAsState()
+                    BubbleContent(
+                        uiState = OverlayUiState(
+                            mode = meta.mode,
+                            unreadCount = meta.unreadCount,
+                            updatesPaused = meta.updatesPaused,
+                            isLoading = meta.isLoading,
+                            errorMessage = meta.errorMessage,
+                            isBubbleVisible = meta.isBubbleVisible,
+                            items = items,
+                        ),
+                        onHeadClick = {
+                            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
+                            renderOverlay()
+                        },
+                        onCollapse = {
+                            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                            clearScrim()
+                            renderOverlay()
+                        },
+                        onClear = {
+                            NotificationEventBus.clearHistory()
+                            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                            clearScrim()
+                            renderOverlay()
+                        },
+                        onToggleUpdates = { NotificationEventBus.togglePaused() },
+                        onReplyClick = ::copyToClipboard,
+                        onDirectSend = ::sendDirectReply,
+                        onRetry = { NotificationEventBus.retryLastFailedRequest() },
+                    )
+                }
             }
         }
 
@@ -266,8 +310,11 @@ class OverlayService : android.app.Service() {
     private fun renderOverlay() {
         val view = bubbleView ?: return
         val meta = NotificationEventBus.metaState.value
+        val hideHeadOverOwnApp =
+            meta.mode == NotificationEventBus.OverlayMode.HEAD && MainAppForegroundTracker.isMainAppInForeground()
+        val showBubble = meta.isBubbleVisible && !hideHeadOverOwnApp
 
-        if (!meta.isBubbleVisible) {
+        if (!showBubble) {
             clearScrim()
             overlayParams.width = 1
             overlayParams.height = 1
@@ -276,16 +323,41 @@ class OverlayService : android.app.Service() {
             return
         }
 
-        overlayParams.flags = overlayParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-        overlayParams.width = if (meta.mode == NotificationEventBus.OverlayMode.HEAD) {
-            WindowManager.LayoutParams.WRAP_CONTENT
+        val baseFlags = overlayParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        overlayParams.flags = if (meta.mode == NotificationEventBus.OverlayMode.PANEL) {
+            // Allow input focus in panel mode so editable reply fields can open IME.
+            baseFlags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         } else {
-            (resources.displayMetrics.widthPixels * 0.88f).roundToInt()
+            baseFlags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+        val metrics = resources.displayMetrics
+        when (meta.mode) {
+            NotificationEventBus.OverlayMode.HEAD -> {
+                overlayParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+                overlayParams.x = bubbleX
+                overlayParams.y = bubbleY
+            }
+            NotificationEventBus.OverlayMode.PANEL -> {
+                val panelWidth = (metrics.widthPixels * 0.88f).roundToInt()
+                overlayParams.width = panelWidth
+                // Center horizontally and anchor near the top so the LazyColumn
+                // remains fully on-screen and every card's Edit/Send is touchable.
+                overlayParams.x = ((metrics.widthPixels - panelWidth) / 2).coerceAtLeast(0)
+                overlayParams.y = panelTopInsetPx()
+            }
         }
         overlayParams.height = WindowManager.LayoutParams.WRAP_CONTENT
         windowManager.updateViewLayout(view, overlayParams)
         updateScrimForMode(meta.mode)
         view.invalidate()
+    }
+
+    private fun panelTopInsetPx(): Int {
+        val statusBarHeight = runCatching {
+            val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
+            if (resId > 0) resources.getDimensionPixelSize(resId) else 0
+        }.getOrDefault(0)
+        return statusBarHeight + 8.dpToPx()
     }
 
     private fun updateScrimForMode(mode: NotificationEventBus.OverlayMode) {
@@ -302,7 +374,8 @@ class OverlayService : android.app.Service() {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT,
             )
             windowManager.addView(scrimView, params)
@@ -320,21 +393,24 @@ class OverlayService : android.app.Service() {
         var touchDownRawX = 0f
         var touchDownRawY = 0f
         var hasMoved = false
+        var isTrackingDrag = false
         val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
-        val panelDragHandleHeightPx = 56.dpToPx().toFloat()
-        val panelDragHandleWidthPx = 140.dpToPx().toFloat()
 
         view.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Dragging is only allowed when the chat head is collapsed.
+                    // In PANEL mode the panel is a fixed centered modal: any
+                    // touch is forwarded to children so the LazyColumn and its
+                    // CTAs receive their own gesture events.
                     val mode = NotificationEventBus.metaState.value.mode
-                    val shouldStartDrag = mode == NotificationEventBus.OverlayMode.HEAD ||
-                            (mode == NotificationEventBus.OverlayMode.PANEL &&
-                                    event.y <= panelDragHandleHeightPx &&
-                                    event.x <= panelDragHandleWidthPx)
-                    if (!shouldStartDrag) return@setOnTouchListener false
-                    initialX = params.x
-                    initialY = params.y
+                    if (mode != NotificationEventBus.OverlayMode.HEAD) {
+                        isTrackingDrag = false
+                        return@setOnTouchListener false
+                    }
+                    isTrackingDrag = true
+                    initialX = bubbleX
+                    initialY = bubbleY
                     touchDownRawX = event.rawX
                     touchDownRawY = event.rawY
                     hasMoved = false
@@ -342,19 +418,26 @@ class OverlayService : android.app.Service() {
                 }
 
                 MotionEvent.ACTION_MOVE -> {
+                    if (!isTrackingDrag) return@setOnTouchListener false
                     val deltaX = (event.rawX - touchDownRawX).roundToInt()
                     val deltaY = (event.rawY - touchDownRawY).roundToInt()
                     if (!hasMoved && (kotlin.math.abs(deltaX) > touchSlop || kotlin.math.abs(deltaY) > touchSlop)) {
                         hasMoved = true
                     }
                     if (!hasMoved) return@setOnTouchListener true
-                    params.x = (initialX + deltaX).coerceAtLeast(0)
-                    params.y = (initialY + deltaY).coerceAtLeast(0)
-                    windowManager.updateViewLayout(view, params)
+                    bubbleX = (initialX + deltaX).coerceAtLeast(0)
+                    bubbleY = (initialY + deltaY).coerceAtLeast(0)
+                    if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
+                        params.x = bubbleX
+                        params.y = bubbleY
+                        windowManager.updateViewLayout(view, params)
+                    }
                     true
                 }
 
                 MotionEvent.ACTION_UP -> {
+                    if (!isTrackingDrag) return@setOnTouchListener false
+                    isTrackingDrag = false
                     if (hasMoved) {
                         snapToNearestEdge(params, view)
                     } else if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
@@ -362,6 +445,11 @@ class OverlayService : android.app.Service() {
                         renderOverlay()
                     }
                     true
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    isTrackingDrag = false
+                    false
                 }
 
                 else -> false
@@ -373,20 +461,21 @@ class OverlayService : android.app.Service() {
         val metrics = resources.displayMetrics
         val viewWidth = if (view.width > 0) view.width else 84.dpToPx()
         val maxX = (metrics.widthPixels - viewWidth).coerceAtLeast(0)
-        params.x = if (params.x < maxX / 2) 0 else maxX
+        bubbleX = if (bubbleX < maxX / 2) 0 else maxX
         val maxY = (metrics.heightPixels - 64.dpToPx()).coerceAtLeast(0)
-        params.y = params.y.coerceIn(0, maxY)
-        windowManager.updateViewLayout(view, params)
-        prefs.edit().putInt("overlay_x", params.x).putInt("overlay_y", params.y).apply()
+        bubbleY = bubbleY.coerceIn(0, maxY)
+        if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
+            params.x = bubbleX
+            params.y = bubbleY
+            windowManager.updateViewLayout(view, params)
+        }
+        prefs.edit().putInt("overlay_x", bubbleX).putInt("overlay_y", bubbleY).apply()
     }
 
     private fun copyToClipboard(text: String, feedbackMessage: String = getString(R.string.dashboard_copied_to_clipboard)) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("reply", text))
         Toast.makeText(this, feedbackMessage, Toast.LENGTH_SHORT).show()
-        NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
-        clearScrim()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) renderOverlay()
     }
 
     private fun sendDirectReply(text: String, chatMessage: ChatMessage) {
@@ -420,10 +509,6 @@ class OverlayService : android.app.Service() {
                 text = text,
             )
             Toast.makeText(this, getString(R.string.dashboard_reply_sent), Toast.LENGTH_SHORT).show()
-            chatMessage.replyActionKey?.let { DirectReplyRegistry.remove(it) }
-            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
-            clearScrim()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) renderOverlay()
         } catch (e: PendingIntent.CanceledException) {
             Log.e(logTag, "Direct reply failed, falling back to clipboard", e)
             copyToClipboard(text, getString(R.string.dashboard_send_failed_copied))
@@ -470,6 +555,26 @@ class OverlayService : android.app.Service() {
     private fun clearScrim() {
         scrimView?.let { runCatching { windowManager.removeView(it) } }
         scrimView = null
+    }
+}
+
+private fun com.example.ai_assis.domain.model.ReplyTone.toSuggestionTone(): com.example.ai_assis.domain.model.SuggestionTone {
+    return when (this) {
+        com.example.ai_assis.domain.model.ReplyTone.CASUAL -> com.example.ai_assis.domain.model.SuggestionTone.CASUAL
+        com.example.ai_assis.domain.model.ReplyTone.PROFESSIONAL -> com.example.ai_assis.domain.model.SuggestionTone.PROFESSIONAL
+        com.example.ai_assis.domain.model.ReplyTone.FLIRTY -> com.example.ai_assis.domain.model.SuggestionTone.CASUAL
+        com.example.ai_assis.domain.model.ReplyTone.ANGRY -> com.example.ai_assis.domain.model.SuggestionTone.PROFESSIONAL
+        com.example.ai_assis.domain.model.ReplyTone.FUNNY -> com.example.ai_assis.domain.model.SuggestionTone.HUMOROUS
+        com.example.ai_assis.domain.model.ReplyTone.SHORT -> com.example.ai_assis.domain.model.SuggestionTone.SHORT
+    }
+}
+
+private fun com.example.ai_assis.domain.model.SuggestionTone.toReplyTone(): com.example.ai_assis.domain.model.ReplyTone {
+    return when (this) {
+        com.example.ai_assis.domain.model.SuggestionTone.CASUAL -> com.example.ai_assis.domain.model.ReplyTone.CASUAL
+        com.example.ai_assis.domain.model.SuggestionTone.PROFESSIONAL -> com.example.ai_assis.domain.model.ReplyTone.PROFESSIONAL
+        com.example.ai_assis.domain.model.SuggestionTone.HUMOROUS -> com.example.ai_assis.domain.model.ReplyTone.FUNNY
+        com.example.ai_assis.domain.model.SuggestionTone.SHORT -> com.example.ai_assis.domain.model.ReplyTone.SHORT
     }
 }
 

@@ -1,6 +1,7 @@
 package com.example.ai_assis.domain.usecase
 
 import com.example.ai_assis.data.local.MediaReplyProvider
+import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.domain.model.ConversationContext
 import com.example.ai_assis.domain.model.HybridSuggestionResult
 import com.example.ai_assis.domain.model.MessageType
@@ -17,6 +18,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
     private val getOnDeviceSuggestionsUseCase: GetOnDeviceSuggestionsUseCase,
     private val getCloudSuggestionsUseCase: GetCloudSuggestionsUseCase,
     private val mediaReplyProvider: MediaReplyProvider,
+    private val getLocalFallbackSuggestionsUseCase: GetLocalFallbackSuggestionsUseCase,
 ) {
     private val cacheMutex = Mutex()
     private val cloudCache = mutableMapOf<String, CacheEntry>()
@@ -24,6 +26,23 @@ class GetHybridSuggestionsUseCase @Inject constructor(
     private var cloudBlockedUntilMs = 0L
 
     suspend operator fun invoke(context: ConversationContext): Result<HybridSuggestionResult> {
+        if (!context.aiEnabled) {
+            val localOnly = getLocalFallbackSuggestionsUseCase(
+                ChatMessage(
+                    sender = context.sender,
+                    message = context.latestMessage,
+                    appSource = context.appPackage,
+                    messageType = context.messageType,
+                ),
+            )
+            return Result.success(
+                HybridSuggestionResult(
+                    suggestions = localOnly,
+                    source = SuggestionSource.ON_DEVICE,
+                    fallbackReason = "ai_disabled",
+                ),
+            )
+        }
         if (context.messageType != MessageType.TEXT) {
             val mediaSuggestions = mediaReplyProvider.getReplies(
                 messageType = context.messageType,

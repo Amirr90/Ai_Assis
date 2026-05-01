@@ -1,6 +1,9 @@
 <resources>
     <string name="app_name">AI_Assis</string>
     <string name="notification_listener_description">Reads notifications to generate AI reply suggestions.</string>
+    <string name="dashboard_tab_overview">Overview</string>
+    <string name="dashboard_tab_activity">Activity</string>
+    <string name="dashboard_tab_settings">Settings</string>
     <string name="dashboard_monitored_apps">Monitored Apps</string>
     <string name="dashboard_ai_suggestions">AI Suggestions</string>
     <string name="dashboard_enable_ai_keyboard_beta">Enable AI Keyboard (Beta)</string>
@@ -41,6 +44,11 @@
     <string name="dashboard_show_less">Show less</string>
     <string name="dashboard_show_more">Show more</string>
     <string name="dashboard_overlay_send_directly">Send directly</string>
+    <string name="dashboard_overlay_edit_suggestion">Edit suggestion</string>
+    <string name="dashboard_overlay_edit_dialog_title">Edit suggestion</string>
+    <string name="dashboard_overlay_copy_edited">Copy</string>
+    <string name="dashboard_overlay_send_edited">Send</string>
+    <string name="dashboard_cancel">Cancel</string>
     <string name="dashboard_assistant_head_description">Smart assistant bubble</string>
     <string name="dashboard_assistant_head_loading">Loading suggestions</string>
     <string name="dashboard_assistant_head_unread">Unread suggestions: %1$d</string>
@@ -77,5 +85,16 @@
     <string name="dashboard_fallback_blocked">safety filtered</string>
     <string name="dashboard_fallback_low_confidence">on-device confidence too low</string>
     <string name="dashboard_fallback_language_mismatch">language mismatch</string>
+    <string name="dashboard_fallback_ai_disabled">AI disabled - showing local suggestions</string>
+    <string name="dashboard_more_options">More options</string>
+    <string name="dashboard_reply_after_10m">Reply after 10 min</string>
+    <string name="dashboard_reminder_set">Reminder set for 10 minutes</string>
+    <string name="dashboard_ai_suggestions_toggle">AI suggestions</string>
+    <string name="dashboard_custom_templates">Custom templates</string>
+    <string name="dashboard_save_template">Save template</string>
+    <string name="dashboard_voice_to_template">Voice to template</string>
+    <string name="dashboard_remove">Remove</string>
+    <string name="dashboard_template_placeholder">Type template e.g. Busy right now</string>
+    <string name="dashboard_voice_template_saved">Saved voice text as template</string>
     <string name="dashboard_fallback_applied">fallback applied</string>
 </resources>

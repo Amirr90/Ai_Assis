@@ -31,7 +31,7 @@ android {
         buildConfigField(
             "String",
             "OPENAI_KEY",
-            "\"${localProperties.getProperty("OPENAI_KEY", "A")}\""
+            "\"${localProperties.getProperty("OPENAI_KEY", "")}\""
         )
         buildConfigField(
             "String",
@@ -76,6 +76,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation("androidx.appcompat:appcompat:1.7.0")
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
@@ -96,6 +97,7 @@ dependencies {
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)

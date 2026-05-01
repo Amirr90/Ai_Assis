@@ -8,10 +8,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -25,6 +29,7 @@ import com.example.ai_assis.presentation.ui.screen.HomeScreen
 import com.example.ai_assis.presentation.ui.screen.PermissionScreen
 import com.example.ai_assis.presentation.viewmodel.AppFilterViewModel
 import com.example.ai_assis.presentation.viewmodel.HomeViewModel
+import com.example.ai_assis.service.MainAppForegroundTracker
 import com.example.ai_assis.service.OverlayService
 import com.example.ai_assis.ui.theme.AI_AssisTheme
 import com.example.ai_assis.util.PermissionUtils
@@ -47,6 +52,18 @@ class MainActivity : ComponentActivity() {
 private fun AppNav() {
     val navController = rememberNavController()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> MainAppForegroundTracker.setMainAppInForeground(true)
+                Lifecycle.Event.ON_STOP -> MainAppForegroundTracker.setMainAppInForeground(false)
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val allPermissionsGranted = PermissionUtils.hasNotificationAccess(context) &&
         PermissionUtils.hasOverlayPermission(context)
