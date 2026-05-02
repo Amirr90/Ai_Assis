@@ -1,13 +1,20 @@
 package com.example.ai_assis
 
+import com.example.ai_assis.data.local.MediaReplyProvider
+import com.example.ai_assis.data.local.UsageManager
+import com.example.ai_assis.domain.DailyAiLimitReachedException
 import com.example.ai_assis.domain.model.ConversationContext
 import com.example.ai_assis.domain.model.Suggestion
 import com.example.ai_assis.domain.model.SuggestionSource
 import com.example.ai_assis.domain.model.SuggestionTone
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
+import com.example.ai_assis.domain.repository.TemplateRepository
 import com.example.ai_assis.domain.usecase.GetCloudSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
+import com.example.ai_assis.domain.usecase.GetLocalFallbackSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetOnDeviceSuggestionsUseCase
+import io.mockk.coEvery
+import io.mockk.mockk
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -27,10 +34,7 @@ class GetHybridSuggestionsUseCaseTest {
             ),
             cloud = listOf(suggestion("Cloud one", 0.9, SuggestionSource.CLOUD)),
         )
-        val useCase = GetHybridSuggestionsUseCase(
-            getOnDeviceSuggestionsUseCase = GetOnDeviceSuggestionsUseCase(repo),
-            getCloudSuggestionsUseCase = GetCloudSuggestionsUseCase(repo),
-        )
+        val useCase = createHybridUseCase(repo = repo)
 
         val result = useCase(context()).getOrThrow()
 
@@ -47,10 +51,7 @@ class GetHybridSuggestionsUseCaseTest {
             ),
             cloud = listOf(suggestion("I will be there soon.", 0.9, SuggestionSource.CLOUD)),
         )
-        val useCase = GetHybridSuggestionsUseCase(
-            getOnDeviceSuggestionsUseCase = GetOnDeviceSuggestionsUseCase(repo),
-            getCloudSuggestionsUseCase = GetCloudSuggestionsUseCase(repo),
-        )
+        val useCase = createHybridUseCase(repo = repo)
 
         val result = useCase(context()).getOrThrow()
 
@@ -65,15 +66,31 @@ class GetHybridSuggestionsUseCaseTest {
             cloud = listOf(suggestion("Cloud", 0.9, SuggestionSource.CLOUD)),
             cloudDelayMs = 2_100L,
         )
-        val useCase = GetHybridSuggestionsUseCase(
-            getOnDeviceSuggestionsUseCase = GetOnDeviceSuggestionsUseCase(repo),
-            getCloudSuggestionsUseCase = GetCloudSuggestionsUseCase(repo),
-        )
+        val useCase = createHybridUseCase(repo = repo)
 
         val result = useCase(context()).getOrThrow()
 
         assertEquals(SuggestionSource.ON_DEVICE, result.source)
         assertEquals("cloud_timeout", result.fallbackReason)
+    }
+
+    @Test
+    fun `does not call cloud when daily usage limit reached`() = runTest {
+        val repo = FakeSmartSuggestionRepository(
+            onDevice = listOf(suggestion("ok", 0.2), suggestion("fine", 0.2)),
+            cloud = listOf(suggestion("Never returned", 0.9, SuggestionSource.CLOUD)),
+        )
+        val usageManager = mockk<UsageManager>()
+        coEvery { usageManager.canUseAI() } returns false
+        coEvery { usageManager.incrementUsage() } returns Unit
+
+        val useCase = createHybridUseCase(repo = repo, usageManager = usageManager)
+
+        val result = useCase(context())
+
+        assertTrue(result.isFailure)
+        assertEquals(DailyAiLimitReachedException.DEFAULT_MESSAGE, result.exceptionOrNull()?.message)
+        assertEquals(0, repo.cloudInvocationCount)
     }
 
     private fun suggestion(text: String, confidence: Double, source: SuggestionSource = SuggestionSource.ON_DEVICE) =
@@ -93,12 +110,14 @@ private class FakeSmartSuggestionRepository(
     private val onDevice: List<Suggestion>,
     private val cloud: List<Suggestion>,
     private val cloudDelayMs: Long = 0L,
+    var cloudInvocationCount: Int = 0,
 ) : SmartSuggestionRepository {
     override suspend fun getOnDeviceSuggestions(context: ConversationContext): Result<List<Suggestion>> {
         return Result.success(onDevice)
     }
 
     override suspend fun getCloudSuggestions(context: ConversationContext): Result<List<Suggestion>> {
+        cloudInvocationCount += 1
         delay(cloudDelayMs)
         return Result.success(cloud)
     }
@@ -106,4 +125,27 @@ private class FakeSmartSuggestionRepository(
     override suspend fun saveTone(tone: SuggestionTone) = Unit
 
     override fun observeTone(): Flow<SuggestionTone> = flowOf(SuggestionTone.CASUAL)
+}
+
+private fun createHybridUseCase(
+    repo: SmartSuggestionRepository,
+    usageManager: UsageManager = defaultUsageManager(),
+): GetHybridSuggestionsUseCase {
+    val media = MediaReplyProvider()
+    val templateRepo = mockk<TemplateRepository>()
+    coEvery { templateRepo.templatesFlow } returns flowOf(emptyList())
+    return GetHybridSuggestionsUseCase(
+        getOnDeviceSuggestionsUseCase = GetOnDeviceSuggestionsUseCase(repo),
+        getCloudSuggestionsUseCase = GetCloudSuggestionsUseCase(repo),
+        mediaReplyProvider = media,
+        getLocalFallbackSuggestionsUseCase = GetLocalFallbackSuggestionsUseCase(media, templateRepo),
+        usageManager = usageManager,
+    )
+}
+
+private fun defaultUsageManager(): UsageManager {
+    val m = mockk<UsageManager>(relaxed = true)
+    coEvery { m.canUseAI() } returns true
+    coEvery { m.incrementUsage() } returns Unit
+    return m
 }

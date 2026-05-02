@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import com.example.ai_assis.presentation.ui.screen.ProUpgradeScreen
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -40,6 +41,12 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -58,6 +65,10 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    companion object {
+        const val EXTRA_OPEN_PRO_UPGRADE: String = "com.example.ai_assis.extra.OPEN_PRO_UPGRADE"
+    }
 }
 
 @Composable
@@ -71,6 +82,22 @@ private fun AppNav() {
                 Lifecycle.Event.ON_START -> MainAppForegroundTracker.setMainAppInForeground(true)
                 Lifecycle.Event.ON_STOP -> MainAppForegroundTracker.setMainAppInForeground(false)
                 else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val activity = context as ComponentActivity
+    DisposableEffect(lifecycleOwner, navController) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (activity.intent.getBooleanExtra(MainActivity.EXTRA_OPEN_PRO_UPGRADE, false)) {
+                    navController.navigate(Screen.ProUpgrade.route) {
+                        launchSingleTop = true
+                    }
+                    activity.intent.removeExtra(MainActivity.EXTRA_OPEN_PRO_UPGRADE)
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -136,6 +163,22 @@ private fun AppNav() {
                 onOpenImeSettings = {
                     context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
                 },
+                onOpenProUpgrade = {
+                    navController.navigate(Screen.ProUpgrade.route) {
+                        launchSingleTop = true
+                    }
+                },
+            )
+        }
+
+        composable(route = Screen.ProUpgrade.route) {
+            val proContext = LocalContext.current
+            ProUpgradeScreen(
+                onUpgrade = {
+                    Toast.makeText(proContext, proContext.getString(R.string.pro_billing_coming_soon), Toast.LENGTH_SHORT)
+                        .show()
+                },
+                onDismiss = { navController.popBackStack() },
             )
         }
 

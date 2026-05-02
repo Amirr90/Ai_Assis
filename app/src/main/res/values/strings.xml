@@ -39,6 +39,9 @@
     <string name="dashboard_overlay_pause_updates">Pause updates</string>
     <string name="dashboard_overlay_clear">Clear suggestions</string>
     <string name="dashboard_overlay_collapse">Collapse panel</string>
+    <string name="dashboard_overlay_expand_suggestion">Expand reply actions</string>
+    <string name="dashboard_overlay_collapse_suggestion">Collapse reply actions</string>
+    <string name="dashboard_overlay_copy_reply_long_press">Long press to copy</string>
     <string name="dashboard_overlay_generating_reply">Generating reply…</string>
     <string name="dashboard_overlay_no_suggestions_all">No suggestions yet. Open WhatsApp, Instagram, or LinkedIn and receive a message.</string>
     <string name="dashboard_show_less">Show less</string>
@@ -54,6 +57,11 @@
     <string name="dashboard_assistant_head_unread">Unread suggestions: %1$d</string>
     <string name="dashboard_assistant_head_action">Open smart replies panel</string>
     <string name="dashboard_ai_short_label">AI</string>
+    <string name="pro_pricing_short">₹99/month · Cancel anytime</string>
+    <string name="pro_teaser_compact">Pro · ₹99/month</string>
+    <string name="pro_upgrade_cta">Upgrade</string>
+    <string name="pro_promo_title">Upgrade to Pro</string>
+    <string name="pro_billing_coming_soon">Billing will be available in a future update.</string>
     <string name="dashboard_user_safe_error_default">Unable to generate suggestions right now. Please try again.</string>
     <string name="dashboard_user_safe_error_rate_limited">Cloud provider is busy right now. Fallback suggestions remain available.</string>
     <string name="dashboard_user_safe_error_cooldown">Cloud providers are cooling down. On-device suggestions remain available.</string>

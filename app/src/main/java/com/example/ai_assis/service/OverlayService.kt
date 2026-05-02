@@ -35,8 +35,10 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.example.ai_assis.MainActivity
 import com.example.ai_assis.R
 import com.example.ai_assis.data.local.ConversationCacheDataSource
+import com.example.ai_assis.domain.DailyAiLimitReachedException
 import com.example.ai_assis.data.local.SenderStyleMemoryDataSource
 import com.example.ai_assis.domain.model.MessageDirection
 import com.example.ai_assis.domain.repository.FeaturePreferencesRepository
@@ -136,7 +138,8 @@ class OverlayService : android.app.Service() {
 
     override fun onDestroy() {
         bubbleView?.let { runCatching { windowManager.removeView(it) } }
-        clearScrim()
+        scrimView?.let { runCatching { windowManager.removeView(it) } }
+        scrimView = null
         bubbleView = null
         NotificationEventBus.setServiceRunning(false)
         overlayOwner.performDestroy()
@@ -221,8 +224,13 @@ class OverlayService : android.app.Service() {
                         return@onFailure
                     }
                     NotificationEventBus.recordFailure(event)
-                    val errorMsg = userFriendlyError(throwable.message)
-                    NotificationEventBus.setError(errorMsg)
+                    val errorMsg = userFriendlyError(throwable)
+                    val errorKind = if (throwable is DailyAiLimitReachedException) {
+                        NotificationEventBus.ErrorKind.DAILY_AI_LIMIT
+                    } else {
+                        NotificationEventBus.ErrorKind.GENERIC
+                    }
+                    NotificationEventBus.setError(errorMsg, errorKind)
                     Log.e(
                         logTag,
                         "Suggestion fetch failed requestId=$requestId app=${event.appSource} durationMs=$elapsedMs error=$errorMsg",
@@ -274,6 +282,7 @@ class OverlayService : android.app.Service() {
                             updatesPaused = meta.updatesPaused,
                             isLoading = meta.isLoading,
                             errorMessage = meta.errorMessage,
+                            errorKind = meta.errorKind,
                             isBubbleVisible = meta.isBubbleVisible,
                             items = items,
                         ),
@@ -297,10 +306,31 @@ class OverlayService : android.app.Service() {
                         onDirectSend = ::sendDirectReply,
                         onRegenerateSuggestion = { message -> NotificationEventBus.regenerateForMessage(message) },
                         onRetry = { NotificationEventBus.retryLastFailedRequest() },
+                        onOpenProUpgrade = ::openMainActivityForProUpgrade,
                     )
                 }
             }
         }
+
+        // Scrim below bubble in z-order: add first, then bubble, so panel receives touches
+        // without removeView/addView cycles that reset the overlay input channel.
+        scrimView = View(this).apply {
+            setBackgroundColor(0x52000000)
+            visibility = View.GONE
+            setOnClickListener {
+                NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                renderOverlay()
+            }
+        }
+        val scrimParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT,
+        )
+        windowManager.addView(scrimView, scrimParams)
 
         bubbleView?.let { view ->
             makeDraggable(view, overlayParams)
@@ -341,7 +371,7 @@ class OverlayService : android.app.Service() {
             NotificationEventBus.OverlayMode.PANEL -> {
                 val panelWidth = (metrics.widthPixels * 0.88f).roundToInt()
                 overlayParams.width = panelWidth
-                // Center horizontally and anchor near the top so the LazyColumn
+                // Center horizontally and anchor near the top so the suggestions list
                 // remains fully on-screen and every card's Edit/Send is touchable.
                 overlayParams.x = ((metrics.widthPixels - panelWidth) / 2).coerceAtLeast(0)
                 overlayParams.y = panelTopInsetPx()
@@ -363,28 +393,9 @@ class OverlayService : android.app.Service() {
 
     private fun updateScrimForMode(mode: NotificationEventBus.OverlayMode) {
         if (mode == NotificationEventBus.OverlayMode.PANEL) {
-            if (scrimView != null) return
-            scrimView = View(this).apply {
-                setBackgroundColor(0x66000000)
-                setOnClickListener {
-                    NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
-                    renderOverlay()
-                }
-            }
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-                PixelFormat.TRANSLUCENT,
-            )
-            windowManager.addView(scrimView, params)
-            bubbleView?.let { windowManager.removeView(it) }
-            bubbleView?.let { windowManager.addView(it, overlayParams) }
+            scrimView?.visibility = View.VISIBLE
         } else {
-            scrimView?.let { runCatching { windowManager.removeView(it) } }
-            scrimView = null
+            scrimView?.visibility = View.GONE
         }
     }
 
@@ -402,9 +413,13 @@ class OverlayService : android.app.Service() {
                 MotionEvent.ACTION_DOWN -> {
                     // Dragging is only allowed when the chat head is collapsed.
                     // In PANEL mode the panel is a fixed centered modal: any
-                    // touch is forwarded to children so the LazyColumn and its
+                    // touch is forwarded to children so the scrollable list and its
                     // CTAs receive their own gesture events.
                     val mode = NotificationEventBus.metaState.value.mode
+                    Log.d(
+                        logTag,
+                        "overlay_touch_down x=${event.x} y=${event.y} raw=(${event.rawX},${event.rawY}) mode=$mode",
+                    )
                     if (mode != NotificationEventBus.OverlayMode.HEAD) {
                         isTrackingDrag = false
                         return@setOnTouchListener false
@@ -516,6 +531,15 @@ class OverlayService : android.app.Service() {
         }
     }
 
+    private fun openMainActivityForProUpgrade() {
+        startActivity(
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(MainActivity.EXTRA_OPEN_PRO_UPGRADE, true)
+            },
+        )
+    }
+
     private fun buildForegroundNotification(): Notification {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -540,7 +564,11 @@ class OverlayService : android.app.Service() {
         const val overlayNotificationId = 101
     }
 
-    private fun userFriendlyError(rawMessage: String?): String {
+    private fun userFriendlyError(throwable: Throwable): String {
+        if (throwable is DailyAiLimitReachedException) {
+            return throwable.message ?: DailyAiLimitReachedException.DEFAULT_MESSAGE
+        }
+        val rawMessage = throwable.message
         val message = rawMessage.orEmpty().lowercase()
         return when {
             message.contains("quota") || message.contains("rate") || message.contains("429") ->
@@ -554,8 +582,7 @@ class OverlayService : android.app.Service() {
     }
 
     private fun clearScrim() {
-        scrimView?.let { runCatching { windowManager.removeView(it) } }
-        scrimView = null
+        scrimView?.visibility = View.GONE
     }
 }
 

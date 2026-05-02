@@ -1,16 +1,22 @@
 package com.example.ai_assis
 
 import com.example.ai_assis.data.local.ConversationCacheDataSource
+import com.example.ai_assis.data.local.MediaReplyProvider
+import com.example.ai_assis.data.local.UsageManager
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.domain.model.ConversationContext
 import com.example.ai_assis.domain.model.Suggestion
 import com.example.ai_assis.domain.model.SuggestionSource
 import com.example.ai_assis.domain.model.SuggestionTone
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
+import com.example.ai_assis.domain.repository.TemplateRepository
 import com.example.ai_assis.domain.usecase.BuildConversationContextUseCase
 import com.example.ai_assis.domain.usecase.GetCloudSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
+import com.example.ai_assis.domain.usecase.GetLocalFallbackSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetOnDeviceSuggestionsUseCase
+import io.mockk.coEvery
+import io.mockk.mockk
 import com.example.ai_assis.presentation.suggestions.SuggestionsEvent
 import com.example.ai_assis.presentation.suggestions.SuggestionsViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -47,10 +53,7 @@ class SuggestionsViewModelTest {
             repository = repo,
             cacheDataSource = ConversationCacheDataSource(),
             buildConversationContextUseCase = BuildConversationContextUseCase(),
-            getHybridSuggestionsUseCase = GetHybridSuggestionsUseCase(
-                getOnDeviceSuggestionsUseCase = GetOnDeviceSuggestionsUseCase(repo),
-                getCloudSuggestionsUseCase = GetCloudSuggestionsUseCase(repo),
-            ),
+            getHybridSuggestionsUseCase = vmHybridUseCase(repo),
         )
 
         vm.onEvent(
@@ -67,6 +70,22 @@ class SuggestionsViewModelTest {
         assertEquals("Alice", vm.uiState.value.senderName)
         assertEquals(3, vm.uiState.value.suggestions.size)
     }
+}
+
+private fun vmHybridUseCase(repo: SmartSuggestionRepository): GetHybridSuggestionsUseCase {
+    val media = MediaReplyProvider()
+    val templateRepo = mockk<TemplateRepository>()
+    coEvery { templateRepo.templatesFlow } returns kotlinx.coroutines.flow.flowOf(emptyList())
+    val usageManager = mockk<UsageManager>(relaxed = true)
+    coEvery { usageManager.canUseAI() } returns true
+    coEvery { usageManager.incrementUsage() } returns Unit
+    return GetHybridSuggestionsUseCase(
+        getOnDeviceSuggestionsUseCase = GetOnDeviceSuggestionsUseCase(repo),
+        getCloudSuggestionsUseCase = GetCloudSuggestionsUseCase(repo),
+        mediaReplyProvider = media,
+        getLocalFallbackSuggestionsUseCase = GetLocalFallbackSuggestionsUseCase(media, templateRepo),
+        usageManager = usageManager,
+    )
 }
 
 private class VmTestRepository : SmartSuggestionRepository {

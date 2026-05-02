@@ -1,6 +1,8 @@
 package com.example.ai_assis.domain.usecase
 
 import com.example.ai_assis.data.local.MediaReplyProvider
+import com.example.ai_assis.data.local.UsageManager
+import com.example.ai_assis.domain.DailyAiLimitReachedException
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.domain.model.ConversationContext
 import com.example.ai_assis.domain.model.HybridSuggestionResult
@@ -19,6 +21,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
     private val getCloudSuggestionsUseCase: GetCloudSuggestionsUseCase,
     private val mediaReplyProvider: MediaReplyProvider,
     private val getLocalFallbackSuggestionsUseCase: GetLocalFallbackSuggestionsUseCase,
+    private val usageManager: UsageManager,
 ) {
     private val cacheMutex = Mutex()
     private val cloudCache = mutableMapOf<String, CacheEntry>()
@@ -92,6 +95,10 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             )
         }
 
+        if (!usageManager.canUseAI()) {
+            return Result.failure(DailyAiLimitReachedException())
+        }
+
         val cloudResult = withTimeoutOrNull(cloudTimeoutMs) { getCloudSuggestionsUseCase(context) }
         if (cloudResult == null) {
             return Result.success(
@@ -107,6 +114,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             onSuccess = { cloudSuggestions ->
                 cloudConsecutiveFailures = 0
                 if (cloudSuggestions.isNotEmpty()) {
+                    usageManager.incrementUsage()
                     putCache(cacheKey, cloudSuggestions)
                     Result.success(
                         HybridSuggestionResult(

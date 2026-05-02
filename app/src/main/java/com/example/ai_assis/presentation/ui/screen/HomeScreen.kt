@@ -83,6 +83,8 @@ import com.example.ai_assis.R
 import com.example.ai_assis.domain.model.ReplyLength
 import com.example.ai_assis.domain.model.ReplyTone
 import com.example.ai_assis.domain.model.appDisplayLabelFor
+import com.example.ai_assis.presentation.ui.components.DailyLimitPricingCallout
+import com.example.ai_assis.presentation.ui.components.HomeProUpgradePromoCard
 import com.example.ai_assis.presentation.ui.components.AppSourceIcon
 import com.example.ai_assis.presentation.ui.components.SourceTab
 import com.example.ai_assis.presentation.ui.components.SourceTabsRow
@@ -124,6 +126,7 @@ fun HomeScreen(
     onOpenAppFilter: () -> Unit,
     onOpenSuggestions: () -> Unit,
     onOpenImeSettings: () -> Unit,
+    onOpenProUpgrade: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -232,6 +235,7 @@ fun HomeScreen(
                 onOpenAppFilter = onOpenAppFilter,
                 onOpenSuggestions = onOpenSuggestions,
                 onOpenImeSettings = onOpenImeSettings,
+                onOpenProUpgrade = onOpenProUpgrade,
             )
 
             DashboardTab.Activity -> HomeActivityTab(
@@ -243,6 +247,7 @@ fun HomeScreen(
                 onSourceTabSelected = { tab -> selectedSourceTabKey = tab.key },
                 viewModel = viewModel,
                 context = context,
+                onOpenProUpgrade = onOpenProUpgrade,
             )
 
             DashboardTab.Settings -> HomeSettingsTab(
@@ -287,12 +292,16 @@ private fun HomeOverviewTab(
     onOpenAppFilter: () -> Unit,
     onOpenSuggestions: () -> Unit,
     onOpenImeSettings: () -> Unit,
+    onOpenProUpgrade: () -> Unit,
 ) {
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        item {
+            HomeProUpgradePromoCard(onOpenProUpgrade = onOpenProUpgrade)
+        }
         item {
             AssistantStatusCard(
                 isRunning = overlayMeta.isServiceRunning,
@@ -347,6 +356,7 @@ private fun HomeActivityTab(
     onSourceTabSelected: (SourceTab) -> Unit,
     viewModel: HomeViewModel,
     context: Context,
+    onOpenProUpgrade: () -> Unit,
 ) {
     LazyColumn(
         modifier = modifier,
@@ -402,19 +412,23 @@ private fun HomeActivityTab(
                             .clip(DashboardCardShape)
                             .background(MaterialTheme.colorScheme.errorContainer)
                             .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
                             text = userSafeErrorText(overlayMeta.errorMessage),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
-                        Text(
-                            text = stringResource(R.string.dashboard_retry_last_request),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable { NotificationEventBus.retryLastFailedRequest() },
-                        )
+                        if (overlayMeta.errorKind == NotificationEventBus.ErrorKind.DAILY_AI_LIMIT) {
+                            DailyLimitPricingCallout(onUpgrade = onOpenProUpgrade)
+                        } else {
+                            Text(
+                                text = stringResource(R.string.dashboard_retry_last_request),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable { NotificationEventBus.retryLastFailedRequest() },
+                            )
+                        }
                     }
                 } else {
                     Text(

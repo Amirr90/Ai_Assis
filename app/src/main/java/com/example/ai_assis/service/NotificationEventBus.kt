@@ -12,6 +12,12 @@ import java.util.concurrent.atomic.AtomicLong
 object NotificationEventBus {
     enum class OverlayMode { HEAD, PANEL }
 
+    enum class ErrorKind {
+        NONE,
+        DAILY_AI_LIMIT,
+        GENERIC,
+    }
+
     data class ChatSuggestionItem(
         val id: Long,
         val chatMessage: ChatMessage,
@@ -29,6 +35,7 @@ object NotificationEventBus {
         val updatesPaused: Boolean = false,
         val isLoading: Boolean = false,
         val errorMessage: String? = null,
+        val errorKind: ErrorKind = ErrorKind.NONE,
         val isBubbleVisible: Boolean = false,
     )
 
@@ -84,6 +91,7 @@ object NotificationEventBus {
             unreadCount = _metaState.value.unreadCount + unreadBump,
             isLoading = false,
             errorMessage = null,
+            errorKind = ErrorKind.NONE,
             isBubbleVisible = true,
         )
     }
@@ -106,6 +114,7 @@ object NotificationEventBus {
             unreadCount = 0,
             isBubbleVisible = false,
             errorMessage = null,
+            errorKind = ErrorKind.NONE,
         )
     }
 
@@ -120,14 +129,16 @@ object NotificationEventBus {
         _metaState.value = _metaState.value.copy(
             isLoading = loading,
             errorMessage = if (loading) null else _metaState.value.errorMessage,
+            errorKind = if (loading) ErrorKind.NONE else _metaState.value.errorKind,
             isBubbleVisible = if (loading) true else _metaState.value.isBubbleVisible,
         )
     }
 
-    fun setError(message: String?) {
+    fun setError(message: String?, kind: ErrorKind = ErrorKind.GENERIC) {
         _metaState.value = _metaState.value.copy(
             isLoading = false,
             errorMessage = message,
+            errorKind = if (message == null) ErrorKind.NONE else kind,
             isBubbleVisible = message != null || _metaState.value.isBubbleVisible,
         )
     }
@@ -142,7 +153,12 @@ object NotificationEventBus {
 
     fun retryLastFailedRequest(): Boolean {
         val message = lastFailedMessage ?: return false
-        _metaState.value = _metaState.value.copy(isLoading = true, errorMessage = null, isBubbleVisible = true)
+        _metaState.value = _metaState.value.copy(
+            isLoading = true,
+            errorMessage = null,
+            errorKind = ErrorKind.NONE,
+            isBubbleVisible = true,
+        )
         _events.tryEmit(message)
         return true
     }
@@ -157,7 +173,12 @@ object NotificationEventBus {
         if (now - lastRegenerateAtMs < regenerateCooldownMs) return false
         lastRegenerateAtMs = now
         lastRequest = message
-        _metaState.value = _metaState.value.copy(isLoading = true, errorMessage = null, isBubbleVisible = true)
+        _metaState.value = _metaState.value.copy(
+            isLoading = true,
+            errorMessage = null,
+            errorKind = ErrorKind.NONE,
+            isBubbleVisible = true,
+        )
         _events.tryEmit(message)
         return true
     }
