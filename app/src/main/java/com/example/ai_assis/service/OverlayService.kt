@@ -315,11 +315,15 @@ class OverlayService : android.app.Service() {
                             errorMessage = meta.errorMessage,
                             errorKind = meta.errorKind,
                             isBubbleVisible = meta.isBubbleVisible,
+                            bubbleAnchorXPx = meta.bubbleAnchorXPx,
+                            bubbleAnchorYPx = meta.bubbleAnchorYPx,
                             items = items,
                         ),
                         onHeadClick = {
                             NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
-                            renderOverlay()
+                            // Let Compose switch to PANEL before WM resizes to full screen (avoids one frame
+                            // where WRAP_CONTENT chat head lays out at (0,0) inside MATCH_PARENT).
+                            bubbleView?.post { renderOverlay() } ?: renderOverlay()
                         },
                         onCollapse = {
                             NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
@@ -382,6 +386,7 @@ class OverlayService : android.app.Service() {
             makeDraggable(view, overlayParams)
             windowManager.addView(view, overlayParams)
         }
+        NotificationEventBus.setBubbleScreenPosition(bubbleX, bubbleY)
     }
 
     private fun renderOverlay() {
@@ -410,7 +415,6 @@ class OverlayService : android.app.Service() {
         } else {
             baseFlags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         }
-        val metrics = resources.displayMetrics
         when (meta.mode) {
             NotificationEventBus.OverlayMode.HEAD -> {
                 overlayParams.width = WindowManager.LayoutParams.WRAP_CONTENT
@@ -419,8 +423,6 @@ class OverlayService : android.app.Service() {
                 overlayParams.y = bubbleY
             }
             NotificationEventBus.OverlayMode.PANEL -> {
-                // Full-screen window: dimmed backdrop + panel are composed in BubbleContent
-                // so outside-tap dismiss reliably hits the backdrop (WM scrim alone can miss touches).
                 overlayParams.width = WindowManager.LayoutParams.MATCH_PARENT
                 overlayParams.height = WindowManager.LayoutParams.MATCH_PARENT
                 overlayParams.x = 0
@@ -429,6 +431,7 @@ class OverlayService : android.app.Service() {
         }
         windowManager.updateViewLayout(view, overlayParams)
         syncComposeChildLayoutParams(meta.mode)
+        NotificationEventBus.setBubbleScreenPosition(bubbleX, bubbleY)
         hideWindowManagerScrim()
         view.invalidate()
     }
@@ -507,6 +510,7 @@ class OverlayService : android.app.Service() {
                         params.x = bubbleX
                         params.y = bubbleY
                         windowManager.updateViewLayout(view, params)
+                        NotificationEventBus.setBubbleScreenPosition(bubbleX, bubbleY)
                     }
                     true
                 }
@@ -518,7 +522,7 @@ class OverlayService : android.app.Service() {
                         clampBubbleToScreenAndPersist(params, view)
                     } else if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
                         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
-                        renderOverlay()
+                        bubbleView?.post { renderOverlay() } ?: renderOverlay()
                     }
                     true
                 }
@@ -546,6 +550,7 @@ class OverlayService : android.app.Service() {
             params.y = bubbleY
             windowManager.updateViewLayout(view, params)
         }
+        NotificationEventBus.setBubbleScreenPosition(bubbleX, bubbleY)
         prefs.edit { putInt("overlay_x", bubbleX).putInt("overlay_y", bubbleY) }
     }
 

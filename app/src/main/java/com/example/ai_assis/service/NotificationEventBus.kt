@@ -43,6 +43,9 @@ object NotificationEventBus {
         val isBubbleVisible: Boolean = false,
         /** While system time is before this value, HEAD mode may show over the main app (post-enable peek). */
         val peekBubbleOverOwnAppUntilMs: Long = 0L,
+        /** Screen coordinates (px): top-left of the draggable chat head; drives Compose placement when WM uses full-screen. */
+        val bubbleAnchorXPx: Int = 0,
+        val bubbleAnchorYPx: Int = 0,
     )
 
     private val _events = MutableSharedFlow<ChatMessage>(extraBufferCapacity = 16)
@@ -56,6 +59,13 @@ object NotificationEventBus {
     private var lastFailedMessage: ChatMessage? = null
     private var lastRequest: ChatMessage? = null
     private var lastRegenerateAtMs: Long = 0L
+
+    fun setBubbleScreenPosition(xPx: Int, yPx: Int) {
+        _metaState.value = _metaState.value.copy(
+            bubbleAnchorXPx = xPx,
+            bubbleAnchorYPx = yPx,
+        )
+    }
 
     fun tryEmit(message: ChatMessage) {
         lastRequest = message

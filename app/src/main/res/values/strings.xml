@@ -111,4 +111,32 @@
     <string name="dashboard_template_placeholder">Type template e.g. Busy right now</string>
     <string name="dashboard_voice_template_saved">Saved voice text as template</string>
     <string name="dashboard_fallback_applied">fallback applied</string>
+
+    <!-- Intro flow -->
+    <string name="flow_splash_brand">AI Assistant</string>
+    <string name="flow_onboarding_title_1">Reply faster with AI ⚡</string>
+    <string name="flow_onboarding_subtitle_1">Get smart reply ideas the moment a message lands—without leaving the chat.</string>
+    <string name="flow_onboarding_title_2">Works across apps 📱</string>
+    <string name="flow_onboarding_subtitle_2">Use the assistant where you already message—one experience, many apps.</string>
+    <string name="flow_onboarding_title_3">Your privacy matters 🔒</string>
+    <string name="flow_onboarding_subtitle_3">We process what’s needed to suggest replies. You stay in control.</string>
+    <string name="flow_onboarding_next">Next</string>
+    <string name="flow_onboarding_skip">Skip</string>
+    <string name="flow_onboarding_pager">Onboarding page %1$d of %2$d</string>
+    <string name="flow_notification_title">Notification access</string>
+    <string name="flow_notification_body">To read new messages and suggest replies, the app needs notification access. You can turn this on in system settings.</string>
+    <string name="flow_notification_allow">Allow Notification Access</string>
+    <string name="flow_notification_next">Continue</string>
+    <string name="flow_overlay_title">Floating assistant</string>
+    <string name="flow_overlay_body">The overlay shows quick AI suggestions on top of other apps. Enable the display-over-other-apps permission to use it.</string>
+    <string name="flow_overlay_enable">Enable Overlay</string>
+    <string name="flow_overlay_next">Continue</string>
+    <string name="flow_login_title">Welcome to AI Assistant</string>
+    <string name="flow_login_google">Continue with Google</string>
+    <string name="flow_login_skip">Skip for now</string>
+    <string name="flow_dashboard_ai_toggle">AI ON/OFF</string>
+    <string name="flow_dashboard_usage">12 / 100 replies this month</string>
+    <string name="flow_dashboard_upgrade">Upgrade</string>
+    <string name="flow_dashboard_settings_coming_soon">Settings — coming soon</string>
+    <string name="flow_dashboard_open_full">Open full app</string>
 </resources>

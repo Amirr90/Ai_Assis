@@ -74,6 +74,9 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.util.lerp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
@@ -90,12 +93,10 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 import com.example.ai_assis.R
 import com.example.ai_assis.domain.model.appDisplayLabelFor
 import com.example.ai_assis.presentation.ui.components.DailyLimitPricingCallout
@@ -108,7 +109,8 @@ import com.example.ai_assis.presentation.ui.components.sourceTabFromKey
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.service.NotificationEventBus
 
-private const val PANEL_DISMISS_WAIT_MS = 340L
+private const val PANEL_DISMISS_WAIT_MS = 380L
+private val ChatHeadSizeDp = 64.dp
 
 data class OverlayUiState(
     val mode: NotificationEventBus.OverlayMode = NotificationEventBus.OverlayMode.HEAD,
@@ -118,6 +120,9 @@ data class OverlayUiState(
     val errorMessage: String? = null,
     val errorKind: NotificationEventBus.ErrorKind = NotificationEventBus.ErrorKind.NONE,
     val isBubbleVisible: Boolean = false,
+    /** Last known chat-head top-left in screen px (from overlay service); used as expand pivot for PANEL. */
+    val bubbleAnchorXPx: Int = 0,
+    val bubbleAnchorYPx: Int = 0,
     val items: List<NotificationEventBus.ChatSuggestionItem> = emptyList(),
 )
 
@@ -159,7 +164,13 @@ fun BubbleContent(
             val scope = rememberCoroutineScope()
             val density = LocalDensity.current
             val configuration = LocalConfiguration.current
+            val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
             val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+            val bubbleSizePx = with(density) { ChatHeadSizeDp.toPx() }
+            val pivotXFraction =
+                ((uiState.bubbleAnchorXPx + bubbleSizePx / 2f) / screenWidthPx).coerceIn(0.02f, 0.98f)
+            val pivotYFraction =
+                ((uiState.bubbleAnchorYPx + bubbleSizePx / 2f) / screenHeightPx).coerceIn(0.02f, 0.98f)
             var panelOpenFraction by remember { mutableFloatStateOf(0f) }
             LaunchedEffect(Unit) {
                 panelOpenFraction = 1f
@@ -172,7 +183,7 @@ fun BubbleContent(
                 ),
                 label = "panelOpenFraction",
             )
-            val panelOffsetPx = (1f - animatedFraction) * screenHeightPx
+            val panelScale = lerp(0.24f, 1f, animatedFraction)
             val scrimAlphaValue = animatedFraction
 
             fun dismissToHead() {
@@ -207,27 +218,36 @@ fun BubbleContent(
                 )
                 Box(
                     Modifier
-                        .fillMaxWidth(0.88f)
-                        .align(Alignment.TopCenter)
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(top = 8.dp)
-                        .offset { IntOffset(0, panelOffsetPx.roundToInt()) },
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = panelScale
+                            scaleY = panelScale
+                            transformOrigin = TransformOrigin(pivotXFraction, pivotYFraction)
+                        },
                 ) {
-                    ExpandedChatPanel(
-                        items = uiState.items,
-                        updatesPaused = uiState.updatesPaused,
-                        isLoading = uiState.isLoading,
-                        errorMessage = uiState.errorMessage,
-                        errorKind = uiState.errorKind,
-                        onCollapse = { dismissToHead() },
-                        onClear = { clearWithAnimation() },
-                        onToggleUpdates = onToggleUpdates,
-                        onReplyClick = onReplyClick,
-                        onDirectSend = onDirectSend,
-                        onRegenerateSuggestion = onRegenerateSuggestion,
-                        onRetry = onRetry,
-                        onOpenProUpgrade = onOpenProUpgrade,
-                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.88f)
+                            .align(Alignment.TopCenter)
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                            .padding(top = 8.dp),
+                    ) {
+                        ExpandedChatPanel(
+                            items = uiState.items,
+                            updatesPaused = uiState.updatesPaused,
+                            isLoading = uiState.isLoading,
+                            errorMessage = uiState.errorMessage,
+                            errorKind = uiState.errorKind,
+                            onCollapse = { dismissToHead() },
+                            onClear = { clearWithAnimation() },
+                            onToggleUpdates = onToggleUpdates,
+                            onReplyClick = onReplyClick,
+                            onDirectSend = onDirectSend,
+                            onRegenerateSuggestion = onRegenerateSuggestion,
+                            onRetry = onRetry,
+                            onOpenProUpgrade = onOpenProUpgrade,
+                        )
+                    }
                 }
             }
         }
@@ -248,7 +268,7 @@ private fun ChatHeadBubble(
     )
     Box(
         modifier = Modifier
-            .size(64.dp)
+            .size(ChatHeadSizeDp)
             .scale(headScale)
             .background(MaterialTheme.colorScheme.primary, CircleShape)
             .semantics {
