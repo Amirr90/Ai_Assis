@@ -5,6 +5,9 @@ import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.example.ai_assis.data.filter.FilterExtras
+import com.example.ai_assis.data.filter.FilterManager
+import com.example.ai_assis.data.filter.FilterResult
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.domain.model.MessageDirection
 import com.example.ai_assis.domain.repository.MonitoredAppsRepository
@@ -21,6 +24,9 @@ class ChatNotificationService : NotificationListenerService() {
 
     @Inject
     lateinit var monitoredAppsRepository: MonitoredAppsRepository
+
+    @Inject
+    lateinit var filterManager: FilterManager
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -47,10 +53,6 @@ class ChatNotificationService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (!currentMonitoredPackages.contains(sbn.packageName)) return
-        if (sbn.packageName == BusinessMessageDetector.WHATSAPP_BUSINESS_PACKAGE) {
-            Log.d(logTag, "Skipping WhatsApp Business notification package=${sbn.packageName}")
-            return
-        }
 
         val extras = sbn.notification.extras
         val parsedContent = parseNotificationContent(
@@ -83,10 +85,6 @@ class ChatNotificationService : NotificationListenerService() {
         }
 
         val sender = parsedContent.sender.ifBlank { "Unknown" }
-        if (BusinessMessageDetector.shouldSkipNotification(sbn.packageName, sender, extras)) {
-            Log.d(logTag, "Skipping business chat notification package=${sbn.packageName} sender=$sender")
-            return
-        }
         if (parsedContent.isLikelySelfMessage) {
             Log.d(
                 logTag,
@@ -99,6 +97,29 @@ class ChatNotificationService : NotificationListenerService() {
             return
         }
         if (isDuplicateNotification(sbn = sbn, sender = sender, text = text, isSummary = parsedContent.isSummary)) return
+
+        when (
+            filterManager.shouldProcess(
+                packageName = sbn.packageName,
+                title = title,
+                message = text,
+                extras = FilterExtras(
+                    sender = sender,
+                    subText = extras.getCharSequence("android.subText")?.toString(),
+                    summaryText = extras.getCharSequence("android.summaryText")?.toString(),
+                    conversationTitle = extras.getCharSequence("android.conversationTitle")?.toString(),
+                ),
+            )
+        ) {
+            FilterResult.Ignore -> {
+                Log.d(logTag, "FilterManager ignored package=${sbn.packageName} sender=$sender")
+                return
+            }
+            FilterResult.Media,
+            FilterResult.Process,
+            -> Unit
+        }
+
         Log.d(
             logTag,
             "Notification captured from ${sbn.packageName} (${sender.ifBlank { "Unknown" }}) source=${parsedContent.sourceHint} summary=${parsedContent.isSummary}",

@@ -34,6 +34,7 @@ import com.example.ai_assis.presentation.ui.screen.PermissionScreen
 import com.example.ai_assis.presentation.viewmodel.AppFilterViewModel
 import com.example.ai_assis.presentation.viewmodel.HomeViewModel
 import com.example.ai_assis.service.MainAppForegroundTracker
+import com.example.ai_assis.service.NotificationEventBus
 import com.example.ai_assis.service.OverlayService
 import com.example.ai_assis.ui.theme.AI_AssisTheme
 import com.example.ai_assis.util.PermissionUtils
@@ -150,6 +151,7 @@ private fun AppNav() {
                 },
                 onStartOverlayService = {
                     context.startService(Intent(context, OverlayService::class.java))
+                    NotificationEventBus.onAssistantEnabledFromApp()
                 },
                 onStopOverlayService = {
                     context.stopService(Intent(context, OverlayService::class.java))

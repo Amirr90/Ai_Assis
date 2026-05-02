@@ -1,8 +1,19 @@
 package com.example.ai_assis.presentation.ui.overlay
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -16,11 +27,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -31,7 +47,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -46,27 +61,41 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.animation.core.animateFloatAsState
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import com.example.ai_assis.R
 import com.example.ai_assis.domain.model.appDisplayLabelFor
 import com.example.ai_assis.presentation.ui.components.DailyLimitPricingCallout
@@ -78,6 +107,8 @@ import com.example.ai_assis.presentation.ui.components.defaultSourceTabs
 import com.example.ai_assis.presentation.ui.components.sourceTabFromKey
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.service.NotificationEventBus
+
+private const val PANEL_DISMISS_WAIT_MS = 340L
 
 data class OverlayUiState(
     val mode: NotificationEventBus.OverlayMode = NotificationEventBus.OverlayMode.HEAD,
@@ -105,29 +136,100 @@ fun BubbleContent(
 ) {
     if (!uiState.isBubbleVisible) return
 
-    Box {
-        if (uiState.mode == NotificationEventBus.OverlayMode.HEAD) {
-            ChatHeadBubble(
-                unreadCount = uiState.unreadCount,
-                isLoading = uiState.isLoading,
-                onClick = onHeadClick,
+    when (uiState.mode) {
+        NotificationEventBus.OverlayMode.HEAD -> {
+            AnimatedVisibility(
+                visible = true,
+                enter = scaleIn(
+                    initialScale = 0.88f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMediumLow,
+                    ),
+                ) + fadeIn(animationSpec = tween(260, easing = FastOutSlowInEasing)),
+            ) {
+                ChatHeadBubble(
+                    unreadCount = uiState.unreadCount,
+                    isLoading = uiState.isLoading,
+                    onClick = onHeadClick,
+                )
+            }
+        }
+        NotificationEventBus.OverlayMode.PANEL -> {
+            val scope = rememberCoroutineScope()
+            val density = LocalDensity.current
+            val configuration = LocalConfiguration.current
+            val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+            var panelOpenFraction by remember { mutableFloatStateOf(0f) }
+            LaunchedEffect(Unit) {
+                panelOpenFraction = 1f
+            }
+            val animatedFraction by animateFloatAsState(
+                targetValue = panelOpenFraction,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+                label = "panelOpenFraction",
             )
-        } else {
-            ExpandedChatPanel(
-                items = uiState.items,
-                updatesPaused = uiState.updatesPaused,
-                isLoading = uiState.isLoading,
-                errorMessage = uiState.errorMessage,
-                errorKind = uiState.errorKind,
-                onCollapse = onCollapse,
-                onClear = onClear,
-                onToggleUpdates = onToggleUpdates,
-                onReplyClick = onReplyClick,
-                onDirectSend = onDirectSend,
-                onRegenerateSuggestion = onRegenerateSuggestion,
-                onRetry = onRetry,
-                onOpenProUpgrade = onOpenProUpgrade,
-            )
+            val panelOffsetPx = (1f - animatedFraction) * screenHeightPx
+            val scrimAlphaValue = animatedFraction
+
+            fun dismissToHead() {
+                scope.launch {
+                    panelOpenFraction = 0f
+                    delay(PANEL_DISMISS_WAIT_MS)
+                    onCollapse()
+                }
+            }
+
+            fun clearWithAnimation() {
+                scope.launch {
+                    panelOpenFraction = 0f
+                    delay(PANEL_DISMISS_WAIT_MS)
+                    onClear()
+                }
+            }
+
+            val backdropInteraction = remember { MutableInteractionSource() }
+            Box(Modifier.fillMaxSize()) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .alpha(scrimAlphaValue)
+                        .background(Color(0x52000000))
+                        .clickable(
+                            indication = null,
+                            interactionSource = backdropInteraction,
+                            onClickLabel = stringResource(R.string.dashboard_overlay_collapse),
+                            onClick = { dismissToHead() },
+                        ),
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth(0.88f)
+                        .align(Alignment.TopCenter)
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .padding(top = 8.dp)
+                        .offset { IntOffset(0, panelOffsetPx.roundToInt()) },
+                ) {
+                    ExpandedChatPanel(
+                        items = uiState.items,
+                        updatesPaused = uiState.updatesPaused,
+                        isLoading = uiState.isLoading,
+                        errorMessage = uiState.errorMessage,
+                        errorKind = uiState.errorKind,
+                        onCollapse = { dismissToHead() },
+                        onClear = { clearWithAnimation() },
+                        onToggleUpdates = onToggleUpdates,
+                        onReplyClick = onReplyClick,
+                        onDirectSend = onDirectSend,
+                        onRegenerateSuggestion = onRegenerateSuggestion,
+                        onRetry = onRetry,
+                        onOpenProUpgrade = onOpenProUpgrade,
+                    )
+                }
+            }
         }
     }
 }
@@ -138,11 +240,22 @@ private fun ChatHeadBubble(
     isLoading: Boolean,
     onClick: () -> Unit,
 ) {
+    val headActionLabel = stringResource(R.string.dashboard_assistant_head_action)
+    val headScale by animateFloatAsState(
+        targetValue = if (isLoading) 0.94f else 1f,
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        label = "chatHeadLoadPulse",
+    )
     Box(
         modifier = Modifier
             .size(64.dp)
+            .scale(headScale)
             .background(MaterialTheme.colorScheme.primary, CircleShape)
-            .clickable(onClickLabel = stringResource(R.string.dashboard_assistant_head_action), onClick = onClick),
+            .semantics {
+                role = Role.Button
+                onClick(action = { onClick(); true })
+                contentDescription = headActionLabel
+            },
         contentAlignment = Alignment.Center,
     ) {
         if (isLoading) {
@@ -206,12 +319,10 @@ private fun ExpandedChatPanel(
     }
     val visibleItems = remember(filteredItems) { filteredItems.take(12) }
     val configuration = LocalConfiguration.current
-    // Cap the suggestions list at the smaller of 420dp and 60% of screen height
-    // so the panel fits within the device viewport even on short screens or
-    // when the IME is open.
+    // Cap list height (slightly shorter than before) so the panel feels lighter on screen.
     val listMaxHeight = remember(configuration.screenHeightDp) {
-        val sixtyPercent = (configuration.screenHeightDp * 0.6f).dp
-        if (sixtyPercent < 420.dp) sixtyPercent else 420.dp
+        val fiftyPercent = (configuration.screenHeightDp * 0.5f).dp
+        if (fiftyPercent < 340.dp) fiftyPercent else 340.dp
     }
     val panelShape = RoundedCornerShape(22.dp)
     Surface(
@@ -358,7 +469,8 @@ private fun ExpandedChatPanel(
                     key(entry.id) {
                         SuggestionCard(
                             entry = entry,
-                            isLoading = isLoading,
+                            isGlobalLoading = isLoading,
+                            errorMessage = errorMessage,
                             onReplyClick = onReplyClick,
                             onDirectSend = onDirectSend,
                             onRegenerateSuggestion = onRegenerateSuggestion,
@@ -415,15 +527,119 @@ private fun OverlaySourceTabs(
     }
 }
 
+private fun chatMessageStableKey(msg: ChatMessage): String = listOf(
+    msg.appSource,
+    msg.sender,
+    msg.message,
+    msg.isSummaryNotification.toString(),
+    msg.replyActionKey ?: "",
+    msg.messageType.name,
+    msg.direction.name,
+).joinToString("\u0001")
+
 @Composable
 private fun SuggestionCard(
     modifier: Modifier = Modifier,
     entry: NotificationEventBus.ChatSuggestionItem,
-    isLoading: Boolean,
+    isGlobalLoading: Boolean,
+    errorMessage: String?,
     onReplyClick: (String) -> Unit,
     onDirectSend: (String, ChatMessage) -> Unit,
     onRegenerateSuggestion: (ChatMessage) -> Boolean,
 ) {
+    val stableKey = chatMessageStableKey(entry.chatMessage)
+    val regenInFlight = remember(stableKey) { AtomicBoolean(false) }
+    var isRegenerating by remember(stableKey) { mutableStateOf(false) }
+    var regenStartRevision by remember(stableKey) { mutableStateOf(0L) }
+    var canUndo by remember(stableKey) { mutableStateOf(false) }
+    var showNewLabel by remember(stableKey) { mutableStateOf(false) }
+    var displayOverride by remember(stableKey) { mutableStateOf<List<String>?>(null) }
+    var previousSuggestions by remember(stableKey) { mutableStateOf<List<String>?>(null) }
+    var undoOfferSession by remember(stableKey) { mutableIntStateOf(0) }
+    var showRegenLimitError by remember(stableKey) { mutableStateOf(false) }
+
+    fun invalidateUndoSession() {
+        canUndo = false
+        showNewLabel = false
+        undoOfferSession++
+    }
+
+    fun runRegenerate() {
+        if (entry.regenerateAttemptCount >= 3) {
+            isRegenerating = false
+            regenInFlight.set(false)
+            showRegenLimitError = true
+            return
+        }
+        if (isRegenerating) return
+        showRegenLimitError = false
+        invalidateUndoSession()
+        previousSuggestions = (displayOverride ?: entry.replies).toList()
+        if (!regenInFlight.compareAndSet(false, true)) return
+        isRegenerating = true
+        regenStartRevision = entry.contentRevision
+        val accepted = onRegenerateSuggestion(entry.chatMessage)
+        if (!accepted) {
+            isRegenerating = false
+            regenInFlight.set(false)
+            if (entry.regenerateAttemptCount >= 3) {
+                showRegenLimitError = true
+            }
+            return
+        }
+    }
+
+    val visibleReplies = displayOverride ?: entry.replies
+    val regenButtonEnabled = !isRegenerating
+
+    LaunchedEffect(entry.contentRevision, isRegenerating, regenStartRevision) {
+        if (!isRegenerating) return@LaunchedEffect
+        if (entry.contentRevision > regenStartRevision) {
+            isRegenerating = false
+            regenInFlight.set(false)
+            showNewLabel = true
+            canUndo = true
+            displayOverride = null
+            undoOfferSession++
+        }
+    }
+
+    LaunchedEffect(errorMessage) {
+        if (errorMessage != null && isRegenerating) {
+            isRegenerating = false
+            regenInFlight.set(false)
+        }
+    }
+
+    LaunchedEffect(isGlobalLoading, errorMessage, entry.contentRevision, regenStartRevision, isRegenerating) {
+        if (!isRegenerating) return@LaunchedEffect
+        if (errorMessage != null) return@LaunchedEffect
+        if (isGlobalLoading) return@LaunchedEffect
+        if (entry.contentRevision > regenStartRevision) return@LaunchedEffect
+        delay(100)
+        if (!isRegenerating) return@LaunchedEffect
+        if (entry.contentRevision > regenStartRevision) return@LaunchedEffect
+        isRegenerating = false
+        regenInFlight.set(false)
+    }
+
+    LaunchedEffect(canUndo, undoOfferSession) {
+        if (!canUndo) return@LaunchedEffect
+        val session = undoOfferSession
+        delay(5_000)
+        if (!canUndo || undoOfferSession != session) return@LaunchedEffect
+        previousSuggestions = null
+        canUndo = false
+        showNewLabel = false
+        undoOfferSession++
+    }
+
+    LaunchedEffect(showRegenLimitError) {
+        if (!showRegenLimitError) return@LaunchedEffect
+        delay(4_000)
+        showRegenLimitError = false
+    }
+
     var activeSendKey by remember(entry.id) { mutableStateOf<String?>(null) }
     var expandedReplyKey by remember(entry.id) { mutableStateOf<String?>(null) }
     var isMessageExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
@@ -433,6 +649,8 @@ private fun SuggestionCard(
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val haptic = LocalHapticFeedback.current
+    val regenerateContentDescription = stringResource(R.string.dashboard_overlay_regenerate)
+    val regenLimitExceededText = stringResource(R.string.dashboard_overlay_regenerate_limit_exceeded)
     val cardShape = RoundedCornerShape(12.dp)
     Column(
         modifier = modifier
@@ -492,22 +710,94 @@ private fun SuggestionCard(
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.weight(1f),
             )
-            if (entry.fallbackReason != null) {
-                SmallOverlayIconButton(
-                    onClick = { onRegenerateSuggestion(entry.chatMessage) },
-                    enabled = !isLoading,
-                    buttonSize = 28,
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = stringResource(R.string.dashboard_retry_last_request),
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            SmallOverlayIconButton(
+                onClick = { runRegenerate() },
+                enabled = regenButtonEnabled,
+                buttonSize = 28,
+                modifier = Modifier.semantics {
+                    contentDescription = regenerateContentDescription
+                },
+            ) {
+                if (isRegenerating) {
+                    CircularProgressIndicator(
                         modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                } else {
+                    Text(
+                        text = "🔄",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
             }
         }
-        entry.replies.forEachIndexed { index, reply ->
+        if (showRegenLimitError) {
+            Text(
+                text = regenLimitExceededText,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (showNewLabel || canUndo) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (showNewLabel) {
+                    Text(
+                        text = stringResource(R.string.dashboard_overlay_new_suggestions),
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                if (canUndo) {
+                    TextButton(
+                        onClick = {
+                            displayOverride = previousSuggestions
+                            canUndo = false
+                            showNewLabel = false
+                            undoOfferSession++
+                        },
+                    ) {
+                        Text(
+                            text = stringResource(R.string.dashboard_overlay_undo),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+        }
+        AnimatedContent(
+            targetState = entry.contentRevision,
+            transitionSpec = {
+                (
+                    fadeIn(
+                        animationSpec = tween(280, easing = FastOutSlowInEasing),
+                    ) + slideInVertically(
+                        initialOffsetY = { h -> h / 10 },
+                        animationSpec = tween(280, easing = FastOutSlowInEasing),
+                    )
+                ) togetherWith (
+                    fadeOut(animationSpec = tween(220, easing = FastOutSlowInEasing)) +
+                        slideOutVertically(
+                            targetOffsetY = { h -> -h / 12 },
+                            animationSpec = tween(220, easing = FastOutSlowInEasing),
+                        )
+                )
+            },
+            label = "suggestionReplies",
+        ) { _ ->
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+        visibleReplies.forEachIndexed { index, reply ->
             val replyKey = "${entry.id}:$index"
             val isEditingThisReply = editableReply == reply
             val isExpanded = expandedReplyKey == replyKey || isEditingThisReply
@@ -557,23 +847,19 @@ private fun SuggestionCard(
                                     },
                                 ),
                         )
-                        if (entry.chatMessage.replyActionKey != null) {
-                            SmoothSendButton(
-                                isSending = isSendingDirect,
-                                buttonSize = 28,
-                                iconSize = 14.dp,
-                                onClick = {
-                                    if (isSendingDirect) return@SmoothSendButton
-                                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                                    activeSendKey = sendKey
-                                    onDirectSend(reply, entry.chatMessage)
-                                },
-                            )
-                        }
+                        SmoothSendButton(
+                            isSending = isSendingDirect,
+                            buttonSize = 28,
+                            iconSize = 14.dp,
+                            onClick = {
+                                if (isSendingDirect) return@SmoothSendButton
+                                haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                                activeSendKey = sendKey
+                                onDirectSend(reply, entry.chatMessage)
+                            },
+                        )
                     }
                 } else {
-                    // Open/expanded: same padding as collapsed so row height stays consistent; only Edit
-                    // (Send stays on the collapsed row so quick-send is one tap when folded).
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -612,14 +898,23 @@ private fun SuggestionCard(
                                 modifier = Modifier.size(14.dp),
                             )
                         }
+                        SmoothSendButton(
+                            isSending = isSendingDirect,
+                            buttonSize = 28,
+                            iconSize = 14.dp,
+                            onClick = {
+                                if (isSendingDirect) return@SmoothSendButton
+                                haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                                activeSendKey = sendKey
+                                onDirectSend(reply, entry.chatMessage)
+                            },
+                        )
                     }
                 }
-                if (entry.chatMessage.replyActionKey != null) {
-                    LaunchedEffect(isSendingDirect, sendKey) {
-                        if (isSendingDirect) {
-                            delay(700)
-                            if (activeSendKey == sendKey) activeSendKey = null
-                        }
+                LaunchedEffect(isSendingDirect, sendKey) {
+                    if (isSendingDirect) {
+                        delay(700)
+                        if (activeSendKey == sendKey) activeSendKey = null
                     }
                 }
                 if (isEditingThisReply) {
@@ -711,6 +1006,8 @@ private fun SuggestionCard(
                 }
             }
         }
+            }
+        }
     }
 }
 
@@ -762,6 +1059,7 @@ private fun userSafeErrorText(error: String?): String {
 private fun SmoothSendButton(
     isSending: Boolean,
     onClick: () -> Unit,
+    enabled: Boolean = true,
     buttonSize: Int = 28,
     iconSize: Dp = 14.dp,
 ) {
@@ -775,7 +1073,7 @@ private fun SmoothSendButton(
 
     SmallOverlayIconButton(
         onClick = onClick,
-        enabled = !isSending,
+        enabled = enabled && !isSending,
         buttonSize = buttonSize,
         interactionSource = interactionSource,
         modifier = Modifier.scale(scale),

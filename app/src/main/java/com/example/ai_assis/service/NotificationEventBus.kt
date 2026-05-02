@@ -26,6 +26,10 @@ object NotificationEventBus {
         val fallbackReason: String? = null,
         val createdAtMs: Long = System.currentTimeMillis(),
         val isRead: Boolean = false,
+        /** Incremented on every in-place suggestion update so UI can detect completion without relying on `replies` equality. */
+        val contentRevision: Long = 0L,
+        /** Regenerate taps recorded for this row; survives overlay UI restarts (max 3 attempts). */
+        val regenerateAttemptCount: Int = 0,
     )
 
     data class OverlayMetaState(
@@ -37,6 +41,8 @@ object NotificationEventBus {
         val errorMessage: String? = null,
         val errorKind: ErrorKind = ErrorKind.NONE,
         val isBubbleVisible: Boolean = false,
+        /** While system time is before this value, HEAD mode may show over the main app (post-enable peek). */
+        val peekBubbleOverOwnAppUntilMs: Long = 0L,
     )
 
     private val _events = MutableSharedFlow<ChatMessage>(extraBufferCapacity = 16)
@@ -64,16 +70,27 @@ object NotificationEventBus {
     ) {
         if (replies.isEmpty() || _metaState.value.updatesPaused) return
         val now = System.currentTimeMillis()
-        val topItem = _chatHistory.value.firstOrNull()
-        if (
-            topItem != null &&
-            topItem.chatMessage.sender == message.sender &&
-            topItem.chatMessage.message == message.message &&
-            topItem.chatMessage.appSource == message.appSource &&
-            topItem.chatMessage.isSummaryNotification == message.isSummaryNotification &&
-            topItem.replies == replies &&
-            (now - topItem.createdAtMs) <= duplicateSuggestionWindowMs
-        ) {
+        val list = _chatHistory.value
+        val matchIndex = list.indexOfFirst { sameConversation(it.chatMessage, message) }
+
+        if (matchIndex >= 0) {
+            val existing = list[matchIndex]
+            val updated = existing.copy(
+                replies = replies,
+                source = source,
+                fallbackReason = fallbackReason,
+                createdAtMs = now,
+                contentRevision = existing.contentRevision + 1L,
+            )
+            val newList = list.toMutableList()
+            newList[matchIndex] = updated
+            _chatHistory.value = newList
+            _metaState.value = _metaState.value.copy(
+                isLoading = false,
+                errorMessage = null,
+                errorKind = ErrorKind.NONE,
+                isBubbleVisible = true,
+            )
             return
         }
 
@@ -85,8 +102,10 @@ object NotificationEventBus {
             source = source,
             fallbackReason = fallbackReason,
             createdAtMs = now,
+            contentRevision = 0L,
+            regenerateAttemptCount = 0,
         )
-        _chatHistory.value = (listOf(newItem) + _chatHistory.value).take(20)
+        _chatHistory.value = (listOf(newItem) + list).take(20)
         _metaState.value = _metaState.value.copy(
             unreadCount = _metaState.value.unreadCount + unreadBump,
             isLoading = false,
@@ -96,10 +115,25 @@ object NotificationEventBus {
         )
     }
 
+    /** Strict identity for matching an overlay row to a [ChatMessage] (regenerate / in-place updates). */
+    fun sameConversation(a: ChatMessage, b: ChatMessage): Boolean =
+        a.sender == b.sender &&
+            a.message == b.message &&
+            a.appSource == b.appSource &&
+            a.isSummaryNotification == b.isSummaryNotification &&
+            a.replyActionKey == b.replyActionKey &&
+            a.messageType == b.messageType &&
+            a.direction == b.direction
+
     fun setMode(mode: OverlayMode) {
         _metaState.value = _metaState.value.copy(
             mode = mode,
             unreadCount = if (mode == OverlayMode.PANEL) 0 else _metaState.value.unreadCount,
+            peekBubbleOverOwnAppUntilMs = if (mode == OverlayMode.PANEL) {
+                0L
+            } else {
+                _metaState.value.peekBubbleOverOwnAppUntilMs
+            },
         )
         if (mode == OverlayMode.PANEL) markAllAsRead()
     }
@@ -115,6 +149,7 @@ object NotificationEventBus {
             isBubbleVisible = false,
             errorMessage = null,
             errorKind = ErrorKind.NONE,
+            peekBubbleOverOwnAppUntilMs = 0L,
         )
     }
 
@@ -122,6 +157,35 @@ object NotificationEventBus {
         _metaState.value = _metaState.value.copy(
             isServiceRunning = running,
             isBubbleVisible = if (!running) false else _metaState.value.isBubbleVisible,
+            peekBubbleOverOwnAppUntilMs = if (!running) 0L else _metaState.value.peekBubbleOverOwnAppUntilMs,
+        )
+    }
+
+    /**
+     * Call when the user enables the assistant from the in-app dashboard so the chat head appears
+     * immediately (briefly over the app) without waiting for a notification.
+     */
+    fun onAssistantEnabledFromApp() {
+        val now = System.currentTimeMillis()
+        _metaState.value = _metaState.value.copy(
+            isBubbleVisible = true,
+            peekBubbleOverOwnAppUntilMs = now + peekBubbleOverOwnAppDurationMs,
+        )
+    }
+
+    /**
+     * Clears expired peek and hides the bubble if there is nothing else to show.
+     * Safe to call often (e.g. before each overlay layout pass).
+     */
+    fun refreshPeekExpiredIfNeeded() {
+        val m = _metaState.value
+        if (m.peekBubbleOverOwnAppUntilMs <= 0L) return
+        if (System.currentTimeMillis() < m.peekBubbleOverOwnAppUntilMs) return
+        val stillNeedBubble =
+            m.isLoading || m.errorMessage != null || _chatHistory.value.isNotEmpty()
+        _metaState.value = m.copy(
+            peekBubbleOverOwnAppUntilMs = 0L,
+            isBubbleVisible = stillNeedBubble,
         )
     }
 
@@ -171,6 +235,17 @@ object NotificationEventBus {
     fun regenerateForMessage(message: ChatMessage): Boolean {
         val now = System.currentTimeMillis()
         if (now - lastRegenerateAtMs < regenerateCooldownMs) return false
+
+        val list = _chatHistory.value
+        val idx = list.indexOfFirst { sameConversation(it.chatMessage, message) }
+        if (idx >= 0) {
+            val item = list[idx]
+            if (item.regenerateAttemptCount >= 3) return false
+            val next = list.toMutableList()
+            next[idx] = item.copy(regenerateAttemptCount = item.regenerateAttemptCount + 1)
+            _chatHistory.value = next
+        }
+
         lastRegenerateAtMs = now
         lastRequest = message
         _metaState.value = _metaState.value.copy(
@@ -188,6 +263,6 @@ object NotificationEventBus {
     }
 
     private val nextItemId = AtomicLong(1L)
-    private const val duplicateSuggestionWindowMs = 4_000L
     private const val regenerateCooldownMs = 1_500L
+    private const val peekBubbleOverOwnAppDurationMs = 12_000L
 }

@@ -14,6 +14,10 @@
     <string name="dashboard_chat_window_hint">Each incoming message shows its own suggested replies.</string>
     <string name="dashboard_clear_history">Clear history</string>
     <string name="dashboard_retry_last_request">Retry last request</string>
+    <string name="dashboard_overlay_regenerate">Regenerate suggestions</string>
+    <string name="dashboard_overlay_new_suggestions">✨ New suggestions</string>
+    <string name="dashboard_overlay_undo">Undo</string>
+    <string name="dashboard_overlay_regenerate_limit_exceeded">Regenerate limit exceeded.</string>
     <string name="dashboard_generating_suggestions">Generating suggestions...</string>
     <string name="dashboard_no_suggestions_all">No suggestions yet. Enable the assistant, then receive a new message from a monitored app.</string>
     <string name="dashboard_no_suggestions_for_source">No suggestions yet for %1$s.</string>
@@ -34,6 +38,8 @@
     <string name="dashboard_reply_send">Send</string>
     <string name="dashboard_copied_to_clipboard">Copied to clipboard</string>
     <string name="dashboard_reply_sent">Reply sent!</string>
+    <string name="dashboard_reply_not_sent">Message wasn\'t sent. Try again.</string>
+    <string name="dashboard_reply_not_sent_copied">Message wasn\'t sent. Copied to clipboard.</string>
     <string name="dashboard_overlay_title">Smart Replies</string>
     <string name="dashboard_overlay_resume_updates">Resume updates</string>
     <string name="dashboard_overlay_pause_updates">Pause updates</string>

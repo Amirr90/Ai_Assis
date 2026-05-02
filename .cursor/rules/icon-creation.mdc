@@ -1,0 +1,53 @@
+---
+description: Monochrome UI icon conventions for AI_Assis — asset design and Compose tint mapping
+alwaysApply: true
+---
+
+# Icon creation and tone (AI_Assis)
+
+When creating new vector/SVG assets or wiring icons in Jetpack Compose, follow these rules so glyphs stay visually consistent.
+
+## Two tiers (by placement, not icon name alone)
+
+- **Tier A — Light / neutral surfaces** (overlay panel body, cards, `Surface` with default/light scheme): glyph should read as **black or dark grey** (Material 3 **on-surface** intent). Examples: Send, Edit, Delete, submit/compose when shown on light chrome.
+- **Tier B — Dark or strongly colored surfaces** (primary-filled buttons, dark bars, saturated chips): glyph **white or near-white** (**on-primary** / **on-primary-container** intent). Examples: Refresh when it sits on a primary or dark control. Do **not** use white glyphs on light backgrounds — contrast fails.
+
+```mermaid
+flowchart LR
+  subgraph placement [Surface placement]
+    LightSurface[LightSurface]
+    DarkOrPrimary[DarkOrPrimarySurface]
+  end
+  subgraph glyph [Glyph color intent]
+    DarkGrey[DarkGrey_or_black]
+    White[White_or_near_white]
+  end
+  LightSurface --> DarkGrey
+  DarkOrPrimary --> White
+```
+
+## Compose (mandatory)
+
+- For app chrome icons, **do not** hardcode `#000000` / `#FFFFFF` in composables. Use **`MaterialTheme.colorScheme`**: e.g. `onSurface`, `onSurfaceVariant`, `onPrimary`, `onPrimaryContainer`, `primary`, `error` as appropriate.
+- Existing overlay pattern: small inline actions (Send, Edit) on tinted buttons use **`onPrimaryContainer`**; header toolbar icons on the panel surface use **`onSurface`** — see `BubbleContent.kt`.
+
+## Vector drawables / exports
+
+- Prefer **single-color** paths for generic UI chrome so **`tint`** or theme attributes can override at runtime.
+- Use **`#FFFFFFFF`** / `@android:color/white` only for assets **designed** to sit on dark or primary-filled backgrounds. Use **`#FF000000`** or one dark grey for light-surface assets, or rely on **`android:tint="?attr/colorControlNormal"`** / theme attributes where the drawable must adapt.
+- Default artboard: **24×24 dp** viewport; outline style ~**2dp** stroke where applicable (Material icon grid).
+
+## Exceptions
+
+- **Brand / social icons** (e.g. WhatsApp, Instagram, LinkedIn): keep **official brand colors**; do not apply monochrome Tier A/B rules.
+- **Status / semantic icons**: success, warning, error — use theme **`primary`**, **`error`**, etc. (e.g. permission/grant patterns on `HomeScreen`), not generic black/white unless Tier placement dictates.
+
+## Quick reference
+
+| Context | Tier | Compose direction |
+|---------|------|-------------------|
+| Send, Edit, Delete on light panel chrome | A | `onSurface` / `onSurfaceVariant` |
+| Send, Edit on primary-container pill/button | B (glyph on colored fill) | `onPrimaryContainer` |
+| Refresh on primary FAB / dark bar | B | `onPrimary` / `onSurface` on dark |
+| Refresh on light toolbar (same as text) | A | `onSurface` |
+| Brand app/source icons | — | Full-color vectors; no forced monochrome |

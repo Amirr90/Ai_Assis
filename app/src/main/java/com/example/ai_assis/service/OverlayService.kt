@@ -19,6 +19,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,14 +55,17 @@ import com.example.ai_assis.ui.theme.AI_AssisTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import javax.inject.Inject
+import androidx.core.content.edit
 
 @AndroidEntryPoint
 class OverlayService : android.app.Service() {
@@ -95,8 +99,12 @@ class OverlayService : android.app.Service() {
     private lateinit var overlayOwner: OverlayViewTreeOwner
     private lateinit var prefs: android.content.SharedPreferences
     private lateinit var overlayParams: WindowManager.LayoutParams
-    private var bubbleView: ComposeView? = null
+    /** Root added to [WindowManager]; wraps [ComposeView] for HEAD touch interception. */
+    private var bubbleView: View? = null
     private var scrimView: View? = null
+    private var peekExpiryJob: Job? = null
+    /** Runs before Compose touch dispatch so HEAD drag/tap work ([HeadInterceptFrameLayout]). */
+    private var bubbleDragListener: View.OnTouchListener? = null
 
     // Position of the draggable chat-head bubble in HEAD mode. Kept separate from
     // overlayParams.x/y because the expanded PANEL is anchored independently
@@ -120,6 +128,29 @@ class OverlayService : android.app.Service() {
         }
         observeMessages()
         observeMainAppForegroundForOverlayLayout()
+        observeMetaStateForLayout()
+    }
+
+    private fun observeMetaStateForLayout() {
+        serviceScope.launch {
+            NotificationEventBus.metaState.collect {
+                NotificationEventBus.refreshPeekExpiredIfNeeded()
+                renderOverlay()
+                schedulePeekExpiryIfNeeded()
+            }
+        }
+    }
+
+    private fun schedulePeekExpiryIfNeeded() {
+        peekExpiryJob?.cancel()
+        val until = NotificationEventBus.metaState.value.peekBubbleOverOwnAppUntilMs
+        val delayMs = until - System.currentTimeMillis()
+        if (delayMs <= 0L) return
+        peekExpiryJob = serviceScope.launch {
+            delay(delayMs)
+            NotificationEventBus.refreshPeekExpiredIfNeeded()
+            renderOverlay()
+        }
     }
 
     private fun observeMainAppForegroundForOverlayLayout() {
@@ -267,7 +298,7 @@ class OverlayService : android.app.Service() {
             y = bubbleY
         }
 
-        bubbleView = ComposeView(this).apply {
+        val composeHost = ComposeView(this).apply {
             setViewTreeLifecycleOwner(overlayOwner)
             setViewTreeSavedStateRegistryOwner(overlayOwner)
             setViewTreeViewModelStoreOwner(overlayOwner)
@@ -311,6 +342,15 @@ class OverlayService : android.app.Service() {
                 }
             }
         }
+        bubbleView = HeadInterceptFrameLayout(this, composeHost).apply {
+            addView(
+                composeHost,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
 
         // Scrim below bubble in z-order: add first, then bubble, so panel receives touches
         // without removeView/addView cycles that reset the overlay input channel.
@@ -319,6 +359,7 @@ class OverlayService : android.app.Service() {
             visibility = View.GONE
             setOnClickListener {
                 NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                clearScrim()
                 renderOverlay()
             }
         }
@@ -341,8 +382,11 @@ class OverlayService : android.app.Service() {
     private fun renderOverlay() {
         val view = bubbleView ?: return
         val meta = NotificationEventBus.metaState.value
+        val peekActive = meta.peekBubbleOverOwnAppUntilMs > System.currentTimeMillis()
         val hideHeadOverOwnApp =
-            meta.mode == NotificationEventBus.OverlayMode.HEAD && MainAppForegroundTracker.isMainAppInForeground()
+            meta.mode == NotificationEventBus.OverlayMode.HEAD &&
+                MainAppForegroundTracker.isMainAppInForeground() &&
+                !peekActive
         val showBubble = meta.isBubbleVisible && !hideHeadOverOwnApp
 
         if (!showBubble) {
@@ -365,38 +409,44 @@ class OverlayService : android.app.Service() {
         when (meta.mode) {
             NotificationEventBus.OverlayMode.HEAD -> {
                 overlayParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+                overlayParams.height = WindowManager.LayoutParams.WRAP_CONTENT
                 overlayParams.x = bubbleX
                 overlayParams.y = bubbleY
             }
             NotificationEventBus.OverlayMode.PANEL -> {
-                val panelWidth = (metrics.widthPixels * 0.88f).roundToInt()
-                overlayParams.width = panelWidth
-                // Center horizontally and anchor near the top so the suggestions list
-                // remains fully on-screen and every card's Edit/Send is touchable.
-                overlayParams.x = ((metrics.widthPixels - panelWidth) / 2).coerceAtLeast(0)
-                overlayParams.y = panelTopInsetPx()
+                // Full-screen window: dimmed backdrop + panel are composed in BubbleContent
+                // so outside-tap dismiss reliably hits the backdrop (WM scrim alone can miss touches).
+                overlayParams.width = WindowManager.LayoutParams.MATCH_PARENT
+                overlayParams.height = WindowManager.LayoutParams.MATCH_PARENT
+                overlayParams.x = 0
+                overlayParams.y = 0
             }
         }
-        overlayParams.height = WindowManager.LayoutParams.WRAP_CONTENT
         windowManager.updateViewLayout(view, overlayParams)
-        updateScrimForMode(meta.mode)
+        syncComposeChildLayoutParams(meta.mode)
+        hideWindowManagerScrim()
         view.invalidate()
     }
 
-    private fun panelTopInsetPx(): Int {
-        val statusBarHeight = runCatching {
-            val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
-            if (resId > 0) resources.getDimensionPixelSize(resId) else 0
-        }.getOrDefault(0)
-        return statusBarHeight + 8.dpToPx()
+    private fun syncComposeChildLayoutParams(mode: NotificationEventBus.OverlayMode) {
+        val root = bubbleView as? HeadInterceptFrameLayout ?: return
+        val lp = root.composeHost.layoutParams as FrameLayout.LayoutParams
+        when (mode) {
+            NotificationEventBus.OverlayMode.PANEL -> {
+                lp.width = FrameLayout.LayoutParams.MATCH_PARENT
+                lp.height = FrameLayout.LayoutParams.MATCH_PARENT
+            }
+            NotificationEventBus.OverlayMode.HEAD -> {
+                lp.width = FrameLayout.LayoutParams.WRAP_CONTENT
+                lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
+            }
+        }
+        root.composeHost.layoutParams = lp
     }
 
-    private fun updateScrimForMode(mode: NotificationEventBus.OverlayMode) {
-        if (mode == NotificationEventBus.OverlayMode.PANEL) {
-            scrimView?.visibility = View.VISIBLE
-        } else {
-            scrimView?.visibility = View.GONE
-        }
+    /** Legacy WM scrim kept for stable z-order init; dimming is in Compose for PANEL. */
+    private fun hideWindowManagerScrim() {
+        scrimView?.visibility = View.GONE
     }
 
     private fun makeDraggable(view: View, params: WindowManager.LayoutParams) {
@@ -408,7 +458,7 @@ class OverlayService : android.app.Service() {
         var isTrackingDrag = false
         val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
 
-        view.setOnTouchListener { _, event ->
+        bubbleDragListener = View.OnTouchListener drag@{ _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     // Dragging is only allowed when the chat head is collapsed.
@@ -422,7 +472,7 @@ class OverlayService : android.app.Service() {
                     )
                     if (mode != NotificationEventBus.OverlayMode.HEAD) {
                         isTrackingDrag = false
-                        return@setOnTouchListener false
+                        return@drag false
                     }
                     isTrackingDrag = true
                     initialX = bubbleX
@@ -434,15 +484,20 @@ class OverlayService : android.app.Service() {
                 }
 
                 MotionEvent.ACTION_MOVE -> {
-                    if (!isTrackingDrag) return@setOnTouchListener false
+                    if (!isTrackingDrag) return@drag false
                     val deltaX = (event.rawX - touchDownRawX).roundToInt()
                     val deltaY = (event.rawY - touchDownRawY).roundToInt()
                     if (!hasMoved && (kotlin.math.abs(deltaX) > touchSlop || kotlin.math.abs(deltaY) > touchSlop)) {
                         hasMoved = true
                     }
-                    if (!hasMoved) return@setOnTouchListener true
-                    bubbleX = (initialX + deltaX).coerceAtLeast(0)
-                    bubbleY = (initialY + deltaY).coerceAtLeast(0)
+                    if (!hasMoved) return@drag true
+                    val metrics = resources.displayMetrics
+                    val vw = if (view.width > 0) view.width else 64.dpToPx()
+                    val vh = if (view.height > 0) view.height else 64.dpToPx()
+                    val maxX = (metrics.widthPixels - vw).coerceAtLeast(0)
+                    val maxY = (metrics.heightPixels - vh).coerceAtLeast(0)
+                    bubbleX = (initialX + deltaX).coerceIn(0, maxX)
+                    bubbleY = (initialY + deltaY).coerceIn(0, maxY)
                     if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
                         params.x = bubbleX
                         params.y = bubbleY
@@ -452,10 +507,10 @@ class OverlayService : android.app.Service() {
                 }
 
                 MotionEvent.ACTION_UP -> {
-                    if (!isTrackingDrag) return@setOnTouchListener false
+                    if (!isTrackingDrag) return@drag false
                     isTrackingDrag = false
                     if (hasMoved) {
-                        snapToNearestEdge(params, view)
+                        clampBubbleToScreenAndPersist(params, view)
                     } else if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
                         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
                         renderOverlay()
@@ -473,19 +528,20 @@ class OverlayService : android.app.Service() {
         }
     }
 
-    private fun snapToNearestEdge(params: WindowManager.LayoutParams, view: View) {
+    private fun clampBubbleToScreenAndPersist(params: WindowManager.LayoutParams, view: View) {
         val metrics = resources.displayMetrics
-        val viewWidth = if (view.width > 0) view.width else 84.dpToPx()
+        val viewWidth = if (view.width > 0) view.width else 64.dpToPx()
+        val viewHeight = if (view.height > 0) view.height else 64.dpToPx()
         val maxX = (metrics.widthPixels - viewWidth).coerceAtLeast(0)
-        bubbleX = if (bubbleX < maxX / 2) 0 else maxX
-        val maxY = (metrics.heightPixels - 64.dpToPx()).coerceAtLeast(0)
+        val maxY = (metrics.heightPixels - viewHeight).coerceAtLeast(0)
+        bubbleX = bubbleX.coerceIn(0, maxX)
         bubbleY = bubbleY.coerceIn(0, maxY)
         if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
             params.x = bubbleX
             params.y = bubbleY
             windowManager.updateViewLayout(view, params)
         }
-        prefs.edit().putInt("overlay_x", bubbleX).putInt("overlay_y", bubbleY).apply()
+        prefs.edit { putInt("overlay_x", bubbleX).putInt("overlay_y", bubbleY) }
     }
 
     private fun copyToClipboard(text: String, feedbackMessage: String = getString(R.string.dashboard_copied_to_clipboard)) {
@@ -495,19 +551,26 @@ class OverlayService : android.app.Service() {
     }
 
     private fun sendDirectReply(text: String, chatMessage: ChatMessage) {
+        fun copyPlainQuiet() {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("reply", text))
+        }
+
         val action = DirectReplyRegistry.resolveForChat(
             key = chatMessage.replyActionKey,
             packageName = chatMessage.appSource,
             sender = chatMessage.sender,
         )
         if (action == null) {
-            copyToClipboard(text, getString(R.string.dashboard_direct_send_unavailable))
+            copyPlainQuiet()
+            Toast.makeText(this, getString(R.string.dashboard_reply_not_sent), Toast.LENGTH_SHORT).show()
             return
         }
         val remoteInput = action.remoteInputs?.firstOrNull { it.allowFreeFormInput }
             ?: action.remoteInputs?.firstOrNull()
         if (remoteInput == null) {
-            copyToClipboard(text, getString(R.string.dashboard_direct_send_unavailable))
+            copyPlainQuiet()
+            Toast.makeText(this, getString(R.string.dashboard_reply_not_sent), Toast.LENGTH_SHORT).show()
             return
         }
         try {
@@ -527,7 +590,8 @@ class OverlayService : android.app.Service() {
             Toast.makeText(this, getString(R.string.dashboard_reply_sent), Toast.LENGTH_SHORT).show()
         } catch (e: PendingIntent.CanceledException) {
             Log.e(logTag, "Direct reply failed, falling back to clipboard", e)
-            copyToClipboard(text, getString(R.string.dashboard_send_failed_copied))
+            copyPlainQuiet()
+            Toast.makeText(this, getString(R.string.dashboard_reply_not_sent_copied), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -583,6 +647,24 @@ class OverlayService : android.app.Service() {
 
     private fun clearScrim() {
         scrimView?.visibility = View.GONE
+    }
+
+    /**
+     * [ComposeView] is final (cannot subclass). This [FrameLayout] runs [bubbleDragListener]
+     * before child dispatch so HEAD drag/tap win over Compose.
+     */
+    private inner class HeadInterceptFrameLayout(
+        ctx: Context,
+        val composeHost: ComposeView,
+    ) : FrameLayout(ctx) {
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
+                bubbleDragListener?.let { listener ->
+                    if (listener.onTouch(composeHost, ev)) return true
+                }
+            }
+            return super.dispatchTouchEvent(ev)
+        }
     }
 }
 
