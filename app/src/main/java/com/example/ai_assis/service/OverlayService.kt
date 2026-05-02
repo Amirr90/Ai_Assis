@@ -343,6 +343,11 @@ class OverlayService : android.app.Service() {
             }
         }
         bubbleView = HeadInterceptFrameLayout(this, composeHost).apply {
+            // WindowManager's root must expose the same tree owners as [ComposeView]; Compose
+            // resolves LifecycleOwner from the overlay root when the activity isn't in scope.
+            setViewTreeLifecycleOwner(overlayOwner)
+            setViewTreeSavedStateRegistryOwner(overlayOwner)
+            setViewTreeViewModelStoreOwner(overlayOwner)
             addView(
                 composeHost,
                 FrameLayout.LayoutParams(
