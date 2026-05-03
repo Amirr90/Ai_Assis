@@ -1,0 +1,255 @@
+package com.example.ai_assis.presentation.ui.screen
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
+import com.example.ai_assis.R
+
+private val CardShape = RoundedCornerShape(18.dp)
+
+@Composable
+fun PlanCard(
+    plan: PricingPlan,
+    selected: Boolean,
+    onClick: () -> Unit,
+    featured: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val typography = MaterialTheme.typography
+
+    val borderWidth by animateDpAsState(
+        targetValue = if (selected) 2.dp else 1.dp,
+        animationSpec = tween(220),
+        label = "planCardBorder",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) scheme.primary else scheme.outlineVariant.copy(alpha = 0.65f),
+        animationSpec = tween(220),
+        label = "planCardBorderColor",
+    )
+    val backgroundColor by animateColorAsState(
+        targetValue = when {
+            selected -> scheme.primary.copy(alpha = 0.10f)
+            featured -> scheme.primaryContainer.copy(alpha = 0.35f)
+            else -> scheme.surface.copy(alpha = 0.42f)
+        },
+        animationSpec = tween(220),
+        label = "planCardBg",
+    )
+
+    val targetScale = when {
+        selected && featured -> 1.03f
+        featured -> 1.02f
+        selected -> 1.01f
+        else -> 1f
+    }
+    val scale by animateFloatAsState(
+        targetValue = targetScale,
+        animationSpec = tween(220),
+        label = "planCardScale",
+    )
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .shadow(
+                elevation = 3.dp,
+                shape = CardShape,
+                ambientColor = scheme.scrim.copy(alpha = 0.07f),
+                spotColor = scheme.scrim.copy(alpha = 0.09f),
+            )
+            .clip(CardShape)
+            .border(borderWidth, borderColor, CardShape)
+            .background(backgroundColor)
+            .padding(horizontal = 18.dp, vertical = 16.dp)
+            .selectable(
+                selected = selected,
+                onClick = onClick,
+                role = Role.RadioButton,
+            ),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = planTitle(plan),
+                style = typography.titleMedium,
+                color = scheme.onSurface,
+            )
+            when {
+                plan == PricingPlan.Free -> {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = scheme.tertiaryContainer,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.pricing_badge_active),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            style = typography.labelMedium,
+                            color = scheme.onTertiaryContainer,
+                        )
+                    }
+                }
+                featured -> {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = scheme.secondaryContainer,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.pricing_badge_most_popular),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            style = typography.labelMedium,
+                            color = scheme.onSecondaryContainer,
+                        )
+                    }
+                }
+            }
+        }
+
+        PlanPriceBlock(plan = plan)
+
+        val features = planFeatures(plan)
+        if (features.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                features.forEach { line ->
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.Start,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = scheme.primary,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = line,
+                            style = typography.bodyMedium,
+                            color = scheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun planTitle(plan: PricingPlan): String = stringResource(
+    when (plan) {
+        PricingPlan.Free -> R.string.pricing_plan_free_title
+        PricingPlan.Monthly -> R.string.pricing_plan_monthly_title
+        PricingPlan.Yearly -> R.string.pricing_plan_yearly_title
+        PricingPlan.Credits -> R.string.pricing_plan_credits_title
+    },
+)
+
+@Composable
+private fun PlanPriceBlock(plan: PricingPlan) {
+    val scheme = MaterialTheme.colorScheme
+    val typography = MaterialTheme.typography
+    when (plan) {
+        PricingPlan.Free -> { /* no price block */ }
+        PricingPlan.Monthly -> {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = stringResource(R.string.pricing_plan_monthly_price_day),
+                    style = typography.titleSmall,
+                    color = scheme.onSurface,
+                )
+                Text(
+                    text = stringResource(R.string.pricing_plan_monthly_billed),
+                    style = typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+            }
+        }
+        PricingPlan.Yearly -> {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = stringResource(R.string.pricing_plan_yearly_price_day),
+                    style = typography.titleSmall,
+                    color = scheme.onSurface,
+                )
+                Text(
+                    text = stringResource(R.string.pricing_plan_yearly_annual),
+                    style = typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(R.string.pricing_plan_yearly_save),
+                    style = typography.labelLarge,
+                    color = scheme.primary,
+                )
+            }
+        }
+        PricingPlan.Credits -> {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.pricing_plan_credits_price),
+                    style = typography.titleSmall,
+                    color = scheme.onSurface,
+                )
+                Text(
+                    text = stringResource(R.string.pricing_plan_credits_subtitle),
+                    style = typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun planFeatures(plan: PricingPlan): List<String> = when (plan) {
+    PricingPlan.Free -> listOf(
+        stringResource(R.string.pricing_plan_free_feature_1),
+        stringResource(R.string.pricing_plan_free_feature_2),
+    )
+    PricingPlan.Monthly,
+    PricingPlan.Yearly,
+    -> listOf(
+        stringResource(R.string.pricing_plan_pro_feature_1),
+        stringResource(R.string.pricing_plan_pro_feature_2),
+        stringResource(R.string.pricing_plan_pro_feature_3),
+    )
+    PricingPlan.Credits -> emptyList()
+}

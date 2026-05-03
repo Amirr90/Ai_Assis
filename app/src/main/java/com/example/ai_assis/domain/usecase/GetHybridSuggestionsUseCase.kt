@@ -99,8 +99,12 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             return Result.failure(DailyAiLimitReachedException())
         }
 
+        // Count usage as soon as a cloud generation starts so UI (e.g. daily counter) updates while loading.
+        usageManager.incrementUsage()
+
         val cloudResult = withTimeoutOrNull(cloudTimeoutMs) { getCloudSuggestionsUseCase(context) }
         if (cloudResult == null) {
+            usageManager.decrementUsage()
             return Result.success(
                 HybridSuggestionResult(
                     suggestions = onDeviceSuggestions,
@@ -114,7 +118,6 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             onSuccess = { cloudSuggestions ->
                 cloudConsecutiveFailures = 0
                 if (cloudSuggestions.isNotEmpty()) {
-                    usageManager.incrementUsage()
                     putCache(cacheKey, cloudSuggestions)
                     Result.success(
                         HybridSuggestionResult(
@@ -124,6 +127,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                         ),
                     )
                 } else {
+                    usageManager.decrementUsage()
                     Result.success(
                         HybridSuggestionResult(
                             suggestions = onDeviceSuggestions,
@@ -134,6 +138,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                 }
             },
             onFailure = { throwable ->
+                usageManager.decrementUsage()
                 registerCloudFailure()
                 val reasonMessage = throwable.message.orEmpty()
                 Result.success(

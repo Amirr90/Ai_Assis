@@ -14,6 +14,7 @@ import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetLocalFallbackSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetOnDeviceSuggestionsUseCase
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -51,12 +52,18 @@ class GetHybridSuggestionsUseCaseTest {
             ),
             cloud = listOf(suggestion("I will be there soon.", 0.9, SuggestionSource.CLOUD)),
         )
-        val useCase = createHybridUseCase(repo = repo)
+        val usageManager = mockk<UsageManager>()
+        coEvery { usageManager.canUseAI() } returns true
+        coEvery { usageManager.incrementUsage() } returns Unit
+        coEvery { usageManager.decrementUsage() } returns Unit
+        val useCase = createHybridUseCase(repo = repo, usageManager = usageManager)
 
         val result = useCase(context()).getOrThrow()
 
         assertEquals(SuggestionSource.CLOUD, result.source)
         assertTrue(result.fallbackReason == "low_confidence")
+        coVerify(exactly = 1) { usageManager.incrementUsage() }
+        coVerify(exactly = 0) { usageManager.decrementUsage() }
     }
 
     @Test
@@ -64,14 +71,20 @@ class GetHybridSuggestionsUseCaseTest {
         val repo = FakeSmartSuggestionRepository(
             onDevice = listOf(suggestion("On device fallback", 0.4), suggestion("On device 2", 0.4)),
             cloud = listOf(suggestion("Cloud", 0.9, SuggestionSource.CLOUD)),
-            cloudDelayMs = 2_100L,
+            cloudDelayMs = 8_000L,
         )
-        val useCase = createHybridUseCase(repo = repo)
+        val usageManager = mockk<UsageManager>()
+        coEvery { usageManager.canUseAI() } returns true
+        coEvery { usageManager.incrementUsage() } returns Unit
+        coEvery { usageManager.decrementUsage() } returns Unit
+        val useCase = createHybridUseCase(repo = repo, usageManager = usageManager)
 
         val result = useCase(context()).getOrThrow()
 
         assertEquals(SuggestionSource.ON_DEVICE, result.source)
         assertEquals("cloud_timeout", result.fallbackReason)
+        coVerify(exactly = 1) { usageManager.incrementUsage() }
+        coVerify(exactly = 1) { usageManager.decrementUsage() }
     }
 
     @Test
@@ -147,5 +160,6 @@ private fun defaultUsageManager(): UsageManager {
     val m = mockk<UsageManager>(relaxed = true)
     coEvery { m.canUseAI() } returns true
     coEvery { m.incrementUsage() } returns Unit
+    coEvery { m.decrementUsage() } returns Unit
     return m
 }

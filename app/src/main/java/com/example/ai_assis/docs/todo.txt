@@ -1,3 +1,4 @@
 Add priority scoring system
 Add user personalization filter
 Add learning-based filtering (AI-powered)
+Sync calendar for days schedule, so teh app suggest the reply for availability accordingly

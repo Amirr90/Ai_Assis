@@ -43,16 +43,15 @@ import com.example.ai_assis.presentation.navigation.Screen
 import com.example.ai_assis.presentation.suggestions.SuggestionsEffect
 import com.example.ai_assis.presentation.suggestions.SuggestionsScreen
 import com.example.ai_assis.presentation.suggestions.SuggestionsViewModel
-import com.example.ai_assis.presentation.ui.flow.DashboardScreen
 import com.example.ai_assis.presentation.ui.flow.LoginScreen
 import com.example.ai_assis.presentation.ui.flow.NotificationPermissionScreen
 import com.example.ai_assis.presentation.ui.flow.OnboardingScreen
 import com.example.ai_assis.presentation.ui.flow.OverlayPermissionScreen
 import com.example.ai_assis.presentation.ui.flow.SplashScreen
 import com.example.ai_assis.presentation.ui.screen.AppFilterScreen
-import com.example.ai_assis.presentation.ui.screen.HomeScreen
+import com.example.ai_assis.presentation.ui.screen.MainDashboardShell
 import com.example.ai_assis.presentation.viewmodel.AppFilterViewModel
-import com.example.ai_assis.presentation.viewmodel.HomeViewModel
+import com.example.ai_assis.presentation.viewmodel.AppInitViewModel
 import com.example.ai_assis.service.MainAppForegroundTracker
 import com.example.ai_assis.service.NotificationEventBus
 import com.example.ai_assis.service.OverlayService
@@ -98,6 +97,7 @@ private fun AppNav() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
+    val appInitViewModel: AppInitViewModel = hiltViewModel()
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -130,7 +130,7 @@ private fun AppNav() {
     var initialRoute: String? by remember { mutableStateOf(null) }
     LaunchedEffect(Unit) {
         initialRoute = if (context.isIntroFlowCompleted()) {
-            Screen.Dashboard.route
+            Screen.MainDashboard.route
         } else {
             Screen.Splash.route
         }
@@ -175,18 +175,19 @@ private fun AppNav() {
 
             composable(route = Screen.NotificationPermission.route) {
                 NotificationPermissionScreen(
-                    onAllowNotificationAccess = {
+                    onOpenNotificationSettings = {
                         context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                     },
                     onContinue = {
                         navController.navigate(Screen.OverlayPermission.route)
                     },
+                    stepIndex = 0,
                 )
             }
 
             composable(route = Screen.OverlayPermission.route) {
                 OverlayPermissionScreen(
-                    onEnableOverlay = {
+                    onOpenOverlaySettings = {
                         context.startActivity(
                             Intent(
                                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -197,6 +198,7 @@ private fun AppNav() {
                     onContinue = {
                         navController.navigate(Screen.Login.route)
                     },
+                    stepIndex = 1,
                 )
             }
 
@@ -206,7 +208,7 @@ private fun AppNav() {
                     {
                         scope.launch {
                             currentContext.setIntroFlowCompleted(true)
-                            navController.navigate(Screen.Dashboard.route) {
+                            navController.navigate(Screen.MainDashboard.route) {
                                 popUpTo(Screen.Onboarding.route) { inclusive = true }
                             }
                         }
@@ -219,23 +221,9 @@ private fun AppNav() {
                 )
             }
 
-            composable(route = Screen.Dashboard.route) {
-                DashboardScreen(
-                    onUpgrade = {
-                        navController.navigate(Screen.ProUpgrade.route) {
-                            launchSingleTop = true
-                        }
-                    },
-                    onOpenFullApp = {
-                        navController.navigate(Screen.Home.route)
-                    },
-                )
-            }
-
-            composable(route = Screen.Home.route) {
-                val homeViewModel: HomeViewModel = hiltViewModel()
-                HomeScreen(
-                    viewModel = homeViewModel,
+            composable(route = Screen.MainDashboard.route) {
+                LaunchedEffect(Unit) { appInitViewModel.ensureAuthAndObserve() }
+                MainDashboardShell(
                     onOpenNotificationAccess = {
                         context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                     },
@@ -272,12 +260,8 @@ private fun AppNav() {
             }
 
             composable(route = Screen.ProUpgrade.route) {
-                val proContext = LocalContext.current
                 ProUpgradeScreen(
-                    onUpgrade = {
-                        Toast.makeText(proContext, proContext.getString(R.string.pro_billing_coming_soon), Toast.LENGTH_SHORT)
-                            .show()
-                    },
+                    onUpgrade = { navController.popBackStack() },
                     onDismiss = { navController.popBackStack() },
                 )
             }

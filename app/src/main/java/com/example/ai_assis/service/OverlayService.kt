@@ -49,7 +49,8 @@ import com.example.ai_assis.domain.usecase.BuildContextMemoryUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.ResolveReplyPolicyUseCase
 import com.example.ai_assis.domain.model.ChatMessage
-import com.example.ai_assis.presentation.ui.overlay.BubbleContent
+import com.example.ai_assis.presentation.ui.overlay.BubbleHeadOverlayContent
+import com.example.ai_assis.presentation.ui.overlay.BubblePanelOverlayContent
 import com.example.ai_assis.presentation.ui.overlay.OverlayUiState
 import com.example.ai_assis.ui.theme.AI_AssisTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -98,10 +99,13 @@ class OverlayService : android.app.Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var overlayOwner: OverlayViewTreeOwner
     private lateinit var prefs: android.content.SharedPreferences
-    private lateinit var overlayParams: WindowManager.LayoutParams
-    /** Root added to [WindowManager]; wraps [ComposeView] for HEAD touch interception. */
-    private var bubbleView: View? = null
-    private var scrimView: View? = null
+    /** Small draggable window for the chat head only; never [MATCH_PARENT]. */
+    private lateinit var headParams: WindowManager.LayoutParams
+    /** Full-screen panel window; added lazily on first [NotificationEventBus.OverlayMode.PANEL]. */
+    private var panelParams: WindowManager.LayoutParams? = null
+    /** Root added to [WindowManager]; wraps head [ComposeView] for HEAD touch interception. */
+    private var headBubbleView: View? = null
+    private var panelOverlayRoot: FrameLayout? = null
     private var peekExpiryJob: Job? = null
     /** Runs before Compose touch dispatch so HEAD drag/tap work ([HeadInterceptFrameLayout]). */
     private var bubbleDragListener: View.OnTouchListener? = null
@@ -156,7 +160,7 @@ class OverlayService : android.app.Service() {
     private fun observeMainAppForegroundForOverlayLayout() {
         serviceScope.launch {
             MainAppForegroundTracker.mainAppForeground.collect {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bubbleView != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && headBubbleView != null) {
                     renderOverlay()
                 }
             }
@@ -168,10 +172,10 @@ class OverlayService : android.app.Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        bubbleView?.let { runCatching { windowManager.removeView(it) } }
-        scrimView?.let { runCatching { windowManager.removeView(it) } }
-        scrimView = null
-        bubbleView = null
+        headBubbleView?.let { runCatching { windowManager.removeView(it) } }
+        panelOverlayRoot?.let { runCatching { windowManager.removeView(it) } }
+        panelOverlayRoot = null
+        headBubbleView = null
         NotificationEventBus.setServiceRunning(false)
         overlayOwner.performDestroy()
         serviceScope.cancel()
@@ -274,7 +278,7 @@ class OverlayService : android.app.Service() {
 
     private fun createOverlayIfPermitted() {
         if (!android.provider.Settings.canDrawOverlays(this)) return
-        if (bubbleView != null) return
+        if (headBubbleView != null) return
 
         val metrics = resources.displayMetrics
         val marginPx = 16.dpToPx()
@@ -284,7 +288,7 @@ class OverlayService : android.app.Service() {
         bubbleX = prefs.getInt("overlay_x", defaultX)
         bubbleY = prefs.getInt("overlay_y", defaultY)
 
-        overlayParams = WindowManager.LayoutParams(
+        headParams = WindowManager.LayoutParams(
             1,
             1,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -305,50 +309,21 @@ class OverlayService : android.app.Service() {
             setContent {
                 AI_AssisTheme {
                     val meta by NotificationEventBus.metaState.collectAsState()
-                    val items by NotificationEventBus.chatHistory.collectAsState()
-                    BubbleContent(
-                        uiState = OverlayUiState(
-                            mode = meta.mode,
+                    if (meta.mode == NotificationEventBus.OverlayMode.HEAD) {
+                        BubbleHeadOverlayContent(
                             unreadCount = meta.unreadCount,
-                            updatesPaused = meta.updatesPaused,
                             isLoading = meta.isLoading,
-                            errorMessage = meta.errorMessage,
-                            errorKind = meta.errorKind,
                             isBubbleVisible = meta.isBubbleVisible,
-                            bubbleAnchorXPx = meta.bubbleAnchorXPx,
-                            bubbleAnchorYPx = meta.bubbleAnchorYPx,
-                            items = items,
-                        ),
-                        onHeadClick = {
-                            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
-                            // Let Compose switch to PANEL before WM resizes to full screen (avoids one frame
-                            // where WRAP_CONTENT chat head lays out at (0,0) inside MATCH_PARENT).
-                            bubbleView?.post { renderOverlay() } ?: renderOverlay()
-                        },
-                        onCollapse = {
-                            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
-                            clearScrim()
-                            renderOverlay()
-                        },
-                        onClear = {
-                            NotificationEventBus.clearHistory()
-                            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
-                            clearScrim()
-                            renderOverlay()
-                        },
-                        onToggleUpdates = { NotificationEventBus.togglePaused() },
-                        onReplyClick = ::copyToClipboard,
-                        onDirectSend = ::sendDirectReply,
-                        onRegenerateSuggestion = { message -> NotificationEventBus.regenerateForMessage(message) },
-                        onRetry = { NotificationEventBus.retryLastFailedRequest() },
-                        onOpenProUpgrade = ::openMainActivityForProUpgrade,
-                    )
+                            onHeadClick = {
+                                NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
+                                headBubbleView?.post { renderOverlay() } ?: renderOverlay()
+                            },
+                        )
+                    }
                 }
             }
         }
-        bubbleView = HeadInterceptFrameLayout(this, composeHost).apply {
-            // WindowManager's root must expose the same tree owners as [ComposeView]; Compose
-            // resolves LifecycleOwner from the overlay root when the activity isn't in scope.
+        headBubbleView = HeadInterceptFrameLayout(this, composeHost).apply {
             setViewTreeLifecycleOwner(overlayOwner)
             setViewTreeSavedStateRegistryOwner(overlayOwner)
             setViewTreeViewModelStoreOwner(overlayOwner)
@@ -361,36 +336,89 @@ class OverlayService : android.app.Service() {
             )
         }
 
-        // Scrim below bubble in z-order: add first, then bubble, so panel receives touches
-        // without removeView/addView cycles that reset the overlay input channel.
-        scrimView = View(this).apply {
-            setBackgroundColor(0x52000000)
-            visibility = View.GONE
-            setOnClickListener {
-                NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
-                clearScrim()
-                renderOverlay()
+        headBubbleView?.let { view ->
+            makeDraggable(view, headParams)
+            windowManager.addView(view, headParams)
+        }
+        NotificationEventBus.setBubbleScreenPosition(bubbleX, bubbleY)
+    }
+
+    /** Panel layer is above the head in z-order ([WindowManager.addView] order). Dimming stays in Compose. */
+    private fun ensurePanelOverlayCreated() {
+        if (panelOverlayRoot != null) return
+
+        val composeHost = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(overlayOwner)
+            setViewTreeSavedStateRegistryOwner(overlayOwner)
+            setViewTreeViewModelStoreOwner(overlayOwner)
+            setContent {
+                AI_AssisTheme {
+                    val meta by NotificationEventBus.metaState.collectAsState()
+                    val items by NotificationEventBus.chatHistory.collectAsState()
+                    BubblePanelOverlayContent(
+                        uiState = OverlayUiState(
+                            mode = meta.mode,
+                            unreadCount = meta.unreadCount,
+                            updatesPaused = meta.updatesPaused,
+                            isLoading = meta.isLoading,
+                            errorMessage = meta.errorMessage,
+                            errorKind = meta.errorKind,
+                            isBubbleVisible = meta.isBubbleVisible,
+                            bubbleAnchorXPx = meta.bubbleAnchorXPx,
+                            bubbleAnchorYPx = meta.bubbleAnchorYPx,
+                            items = items,
+                        ),
+                        onCollapse = {
+                            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                            renderOverlay()
+                        },
+                        onClear = {
+                            NotificationEventBus.clearHistory()
+                            NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
+                            renderOverlay()
+                        },
+                        onToggleUpdates = { NotificationEventBus.togglePaused() },
+                        onReplyClick = ::copyToClipboard,
+                        onDirectSend = ::sendDirectReply,
+                        onRegenerateSuggestion = { message -> NotificationEventBus.regenerateForMessage(message) },
+                        onRetry = { NotificationEventBus.retryLastFailedRequest() },
+                        onOpenProUpgrade = ::openMainActivityForProUpgrade,
+                    )
+                }
             }
         }
-        val scrimParams = WindowManager.LayoutParams(
+        panelOverlayRoot = FrameLayout(this).apply {
+            setViewTreeLifecycleOwner(overlayOwner)
+            setViewTreeSavedStateRegistryOwner(overlayOwner)
+            setViewTreeViewModelStoreOwner(overlayOwner)
+            addView(
+                composeHost,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            visibility = View.GONE
+        }
+        panelParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT,
-        )
-        windowManager.addView(scrimView, scrimParams)
-
-        bubbleView?.let { view ->
-            makeDraggable(view, overlayParams)
-            windowManager.addView(view, overlayParams)
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
         }
-        NotificationEventBus.setBubbleScreenPosition(bubbleX, bubbleY)
+        panelOverlayRoot?.let { root ->
+            windowManager.addView(root, panelParams!!)
+        }
     }
 
     private fun renderOverlay() {
-        val view = bubbleView ?: return
+        val headView = headBubbleView ?: return
         val meta = NotificationEventBus.metaState.value
         val peekActive = meta.peekBubbleOverOwnAppUntilMs > System.currentTimeMillis()
         val hideHeadOverOwnApp =
@@ -400,61 +428,60 @@ class OverlayService : android.app.Service() {
         val showBubble = meta.isBubbleVisible && !hideHeadOverOwnApp
 
         if (!showBubble) {
-            clearScrim()
-            overlayParams.width = 1
-            overlayParams.height = 1
-            overlayParams.flags = overlayParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-            windowManager.updateViewLayout(view, overlayParams)
+            headParams.width = 1
+            headParams.height = 1
+            headParams.flags = headParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            headView.visibility = View.VISIBLE
+            windowManager.updateViewLayout(headView, headParams)
+            panelOverlayRoot?.apply {
+                visibility = View.GONE
+                val p = panelParams ?: return@apply
+                p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                windowManager.updateViewLayout(this, p)
+            }
             return
         }
 
-        val baseFlags = overlayParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-        overlayParams.flags = if (meta.mode == NotificationEventBus.OverlayMode.PANEL) {
-            // Allow input focus in panel mode so editable reply fields can open IME.
-            baseFlags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
-        } else {
-            baseFlags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        }
         when (meta.mode) {
             NotificationEventBus.OverlayMode.HEAD -> {
-                overlayParams.width = WindowManager.LayoutParams.WRAP_CONTENT
-                overlayParams.height = WindowManager.LayoutParams.WRAP_CONTENT
-                overlayParams.x = bubbleX
-                overlayParams.y = bubbleY
+                panelOverlayRoot?.apply {
+                    visibility = View.GONE
+                    val p = panelParams ?: return@apply
+                    p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    windowManager.updateViewLayout(this, p)
+                }
+                headView.visibility = View.VISIBLE
+                val baseHead = headParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                headParams.flags = baseHead or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                headParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+                headParams.height = WindowManager.LayoutParams.WRAP_CONTENT
+                headParams.x = bubbleX
+                headParams.y = bubbleY
+                windowManager.updateViewLayout(headView, headParams)
+                syncHeadComposeLayoutParams()
             }
             NotificationEventBus.OverlayMode.PANEL -> {
-                overlayParams.width = WindowManager.LayoutParams.MATCH_PARENT
-                overlayParams.height = WindowManager.LayoutParams.MATCH_PARENT
-                overlayParams.x = 0
-                overlayParams.y = 0
+                ensurePanelOverlayCreated()
+                val panel = panelOverlayRoot ?: return
+                val p = panelParams ?: return
+                headView.visibility = View.GONE
+                val basePanel = p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                p.flags = basePanel and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+                panel.visibility = View.VISIBLE
+                windowManager.updateViewLayout(panel, p)
             }
         }
-        windowManager.updateViewLayout(view, overlayParams)
-        syncComposeChildLayoutParams(meta.mode)
         NotificationEventBus.setBubbleScreenPosition(bubbleX, bubbleY)
-        hideWindowManagerScrim()
-        view.invalidate()
+        headView.invalidate()
+        panelOverlayRoot?.invalidate()
     }
 
-    private fun syncComposeChildLayoutParams(mode: NotificationEventBus.OverlayMode) {
-        val root = bubbleView as? HeadInterceptFrameLayout ?: return
+    private fun syncHeadComposeLayoutParams() {
+        val root = headBubbleView as? HeadInterceptFrameLayout ?: return
         val lp = root.composeHost.layoutParams as FrameLayout.LayoutParams
-        when (mode) {
-            NotificationEventBus.OverlayMode.PANEL -> {
-                lp.width = FrameLayout.LayoutParams.MATCH_PARENT
-                lp.height = FrameLayout.LayoutParams.MATCH_PARENT
-            }
-            NotificationEventBus.OverlayMode.HEAD -> {
-                lp.width = FrameLayout.LayoutParams.WRAP_CONTENT
-                lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
-            }
-        }
+        lp.width = FrameLayout.LayoutParams.WRAP_CONTENT
+        lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
         root.composeHost.layoutParams = lp
-    }
-
-    /** Legacy WM scrim kept for stable z-order init; dimming is in Compose for PANEL. */
-    private fun hideWindowManagerScrim() {
-        scrimView?.visibility = View.GONE
     }
 
     private fun makeDraggable(view: View, params: WindowManager.LayoutParams) {
@@ -522,7 +549,7 @@ class OverlayService : android.app.Service() {
                         clampBubbleToScreenAndPersist(params, view)
                     } else if (NotificationEventBus.metaState.value.mode == NotificationEventBus.OverlayMode.HEAD) {
                         NotificationEventBus.setMode(NotificationEventBus.OverlayMode.PANEL)
-                        bubbleView?.post { renderOverlay() } ?: renderOverlay()
+                        headBubbleView?.post { renderOverlay() } ?: renderOverlay()
                     }
                     true
                 }
@@ -653,10 +680,6 @@ class OverlayService : android.app.Service() {
                 getString(R.string.dashboard_user_safe_error_cloud_unavailable)
             else -> getString(R.string.dashboard_user_safe_error_default)
         }
-    }
-
-    private fun clearScrim() {
-        scrimView?.visibility = View.GONE
     }
 
     /**

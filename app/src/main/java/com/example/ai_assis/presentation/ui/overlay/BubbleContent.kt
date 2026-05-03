@@ -126,6 +126,140 @@ data class OverlayUiState(
     val items: List<NotificationEventBus.ChatSuggestionItem> = emptyList(),
 )
 
+/** Chat head only; used by the small draggable overlay window ([OverlayService] head layer). */
+@Composable
+fun BubbleHeadOverlayContent(
+    unreadCount: Int,
+    isLoading: Boolean,
+    isBubbleVisible: Boolean,
+    onHeadClick: () -> Unit,
+) {
+    if (!isBubbleVisible) return
+    AnimatedVisibility(
+        visible = true,
+        enter = scaleIn(
+            initialScale = 0.88f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+        ) + fadeIn(animationSpec = tween(260, easing = FastOutSlowInEasing)),
+    ) {
+        ChatHeadBubble(
+            unreadCount = unreadCount,
+            isLoading = isLoading,
+            onClick = onHeadClick,
+        )
+    }
+}
+
+/** Full-screen panel; used by the dedicated panel overlay window ([OverlayService] panel layer). */
+@Composable
+fun BubblePanelOverlayContent(
+    uiState: OverlayUiState,
+    onCollapse: () -> Unit,
+    onClear: () -> Unit,
+    onToggleUpdates: () -> Unit,
+    onReplyClick: (String) -> Unit,
+    onDirectSend: (String, ChatMessage) -> Unit,
+    onRegenerateSuggestion: (ChatMessage) -> Boolean,
+    onRetry: () -> Boolean,
+    onOpenProUpgrade: () -> Unit,
+) {
+    if (!uiState.isBubbleVisible) return
+    if (uiState.mode != NotificationEventBus.OverlayMode.PANEL) return
+
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+    val bubbleSizePx = with(density) { ChatHeadSizeDp.toPx() }
+    val pivotXFraction =
+        ((uiState.bubbleAnchorXPx + bubbleSizePx / 2f) / screenWidthPx).coerceIn(0.02f, 0.98f)
+    val pivotYFraction =
+        ((uiState.bubbleAnchorYPx + bubbleSizePx / 2f) / screenHeightPx).coerceIn(0.02f, 0.98f)
+    var panelOpenFraction by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        panelOpenFraction = 1f
+    }
+    val animatedFraction by animateFloatAsState(
+        targetValue = panelOpenFraction,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "panelOpenFraction",
+    )
+    val panelScale = lerp(0.24f, 1f, animatedFraction)
+    val scrimAlphaValue = animatedFraction
+
+    fun dismissToHead() {
+        scope.launch {
+            panelOpenFraction = 0f
+            delay(PANEL_DISMISS_WAIT_MS)
+            onCollapse()
+        }
+    }
+
+    fun clearWithAnimation() {
+        scope.launch {
+            panelOpenFraction = 0f
+            delay(PANEL_DISMISS_WAIT_MS)
+            onClear()
+        }
+    }
+
+    val backdropInteraction = remember { MutableInteractionSource() }
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .alpha(scrimAlphaValue)
+                .background(Color(0x52000000))
+                .clickable(
+                    indication = null,
+                    interactionSource = backdropInteraction,
+                    onClickLabel = stringResource(R.string.dashboard_overlay_collapse),
+                    onClick = { dismissToHead() },
+                ),
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = panelScale
+                    scaleY = panelScale
+                    transformOrigin = TransformOrigin(pivotXFraction, pivotYFraction)
+                },
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(0.88f)
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = 8.dp),
+            ) {
+                ExpandedChatPanel(
+                    items = uiState.items,
+                    updatesPaused = uiState.updatesPaused,
+                    isLoading = uiState.isLoading,
+                    errorMessage = uiState.errorMessage,
+                    errorKind = uiState.errorKind,
+                    onCollapse = { dismissToHead() },
+                    onClear = { clearWithAnimation() },
+                    onToggleUpdates = onToggleUpdates,
+                    onReplyClick = onReplyClick,
+                    onDirectSend = onDirectSend,
+                    onRegenerateSuggestion = onRegenerateSuggestion,
+                    onRetry = onRetry,
+                    onOpenProUpgrade = onOpenProUpgrade,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun BubbleContent(
     uiState: OverlayUiState,
@@ -143,113 +277,25 @@ fun BubbleContent(
 
     when (uiState.mode) {
         NotificationEventBus.OverlayMode.HEAD -> {
-            AnimatedVisibility(
-                visible = true,
-                enter = scaleIn(
-                    initialScale = 0.88f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    ),
-                ) + fadeIn(animationSpec = tween(260, easing = FastOutSlowInEasing)),
-            ) {
-                ChatHeadBubble(
-                    unreadCount = uiState.unreadCount,
-                    isLoading = uiState.isLoading,
-                    onClick = onHeadClick,
-                )
-            }
+            BubbleHeadOverlayContent(
+                unreadCount = uiState.unreadCount,
+                isLoading = uiState.isLoading,
+                isBubbleVisible = true,
+                onHeadClick = onHeadClick,
+            )
         }
         NotificationEventBus.OverlayMode.PANEL -> {
-            val scope = rememberCoroutineScope()
-            val density = LocalDensity.current
-            val configuration = LocalConfiguration.current
-            val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
-            val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
-            val bubbleSizePx = with(density) { ChatHeadSizeDp.toPx() }
-            val pivotXFraction =
-                ((uiState.bubbleAnchorXPx + bubbleSizePx / 2f) / screenWidthPx).coerceIn(0.02f, 0.98f)
-            val pivotYFraction =
-                ((uiState.bubbleAnchorYPx + bubbleSizePx / 2f) / screenHeightPx).coerceIn(0.02f, 0.98f)
-            var panelOpenFraction by remember { mutableFloatStateOf(0f) }
-            LaunchedEffect(Unit) {
-                panelOpenFraction = 1f
-            }
-            val animatedFraction by animateFloatAsState(
-                targetValue = panelOpenFraction,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
-                label = "panelOpenFraction",
+            BubblePanelOverlayContent(
+                uiState = uiState,
+                onCollapse = onCollapse,
+                onClear = onClear,
+                onToggleUpdates = onToggleUpdates,
+                onReplyClick = onReplyClick,
+                onDirectSend = onDirectSend,
+                onRegenerateSuggestion = onRegenerateSuggestion,
+                onRetry = onRetry,
+                onOpenProUpgrade = onOpenProUpgrade,
             )
-            val panelScale = lerp(0.24f, 1f, animatedFraction)
-            val scrimAlphaValue = animatedFraction
-
-            fun dismissToHead() {
-                scope.launch {
-                    panelOpenFraction = 0f
-                    delay(PANEL_DISMISS_WAIT_MS)
-                    onCollapse()
-                }
-            }
-
-            fun clearWithAnimation() {
-                scope.launch {
-                    panelOpenFraction = 0f
-                    delay(PANEL_DISMISS_WAIT_MS)
-                    onClear()
-                }
-            }
-
-            val backdropInteraction = remember { MutableInteractionSource() }
-            Box(Modifier.fillMaxSize()) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .alpha(scrimAlphaValue)
-                        .background(Color(0x52000000))
-                        .clickable(
-                            indication = null,
-                            interactionSource = backdropInteraction,
-                            onClickLabel = stringResource(R.string.dashboard_overlay_collapse),
-                            onClick = { dismissToHead() },
-                        ),
-                )
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = panelScale
-                            scaleY = panelScale
-                            transformOrigin = TransformOrigin(pivotXFraction, pivotYFraction)
-                        },
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(0.88f)
-                            .align(Alignment.TopCenter)
-                            .windowInsetsPadding(WindowInsets.statusBars)
-                            .padding(top = 8.dp),
-                    ) {
-                        ExpandedChatPanel(
-                            items = uiState.items,
-                            updatesPaused = uiState.updatesPaused,
-                            isLoading = uiState.isLoading,
-                            errorMessage = uiState.errorMessage,
-                            errorKind = uiState.errorKind,
-                            onCollapse = { dismissToHead() },
-                            onClear = { clearWithAnimation() },
-                            onToggleUpdates = onToggleUpdates,
-                            onReplyClick = onReplyClick,
-                            onDirectSend = onDirectSend,
-                            onRegenerateSuggestion = onRegenerateSuggestion,
-                            onRetry = onRetry,
-                            onOpenProUpgrade = onOpenProUpgrade,
-                        )
-                    }
-                }
-            }
         }
     }
 }
@@ -348,7 +394,8 @@ private fun ExpandedChatPanel(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = panelShape,
-        color = MaterialTheme.colorScheme.surface,
+        // Slightly higher surface tier so body text meets contrast on all devices.
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 3.dp,
         shadowElevation = 6.dp,
     ) {
@@ -403,7 +450,12 @@ private fun ExpandedChatPanel(
             }
 
             // Max visibility for pricing until subscription / isPro gating exists.
-            OverlayProPricingTeaser(onOpenProUpgrade = onOpenProUpgrade)
+            // Suppressed while the daily-limit error block shows its own DailyLimitPricingCallout
+            // to avoid duplicate Upgrade CTAs stacked in the panel.
+            val showProTeaser = errorKind != NotificationEventBus.ErrorKind.DAILY_AI_LIMIT
+            if (showProTeaser) {
+                OverlayProPricingTeaser(onOpenProUpgrade = onOpenProUpgrade)
+            }
 
             if (isLoading) {
                 Row(
@@ -422,7 +474,7 @@ private fun ExpandedChatPanel(
                     Text(
                         text = stringResource(R.string.dashboard_overlay_generating_reply),
                         color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }
@@ -438,7 +490,7 @@ private fun ExpandedChatPanel(
                     Text(
                         text = userSafeErrorText(errorMessage),
                         color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                     )
                     if (errorKind == NotificationEventBus.ErrorKind.DAILY_AI_LIMIT) {
                         DailyLimitPricingCallout(
@@ -470,7 +522,7 @@ private fun ExpandedChatPanel(
                     } else {
                         stringResource(R.string.dashboard_no_suggestions_for_source, selectedTab.title)
                     },
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -676,9 +728,10 @@ private fun SuggestionCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(cardShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), cardShape)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            // Solid container (no heavy wash-out) for reliable on-surface contrast.
+            .background(MaterialTheme.colorScheme.surfaceContainer, cardShape)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -691,26 +744,53 @@ private fun SuggestionCard(
                 style = MaterialTheme.typography.labelMedium,
             )
         }
-        Text(
-            text = entry.chatMessage.message,
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = if (isMessageExpanded) Int.MAX_VALUE else 3,
-            overflow = TextOverflow.Ellipsis,
-            onTextLayout = { layoutResult ->
-                val next = if (isMessageExpanded) true else layoutResult.hasVisualOverflow
-                if (next != isMessageOverflowing) {
-                    isMessageOverflowing = next
-                }
-            },
-        )
-        if (isMessageOverflowing) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .animateContentSize(
+                    animationSpec = tween(
+                        durationMillis = 280,
+                        easing = FastOutSlowInEasing,
+                    ),
+                ),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             Text(
-                text = if (isMessageExpanded) stringResource(R.string.dashboard_show_less) else stringResource(R.string.dashboard_show_more),
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.clickable { isMessageExpanded = !isMessageExpanded },
+                text = entry.chatMessage.message,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = if (isMessageExpanded) Int.MAX_VALUE else 3,
+                overflow = TextOverflow.Ellipsis,
+                onTextLayout = { layoutResult ->
+                    val next = if (isMessageExpanded) true else layoutResult.hasVisualOverflow
+                    if (next != isMessageOverflowing) {
+                        isMessageOverflowing = next
+                    }
+                },
             )
+            if (isMessageOverflowing) {
+                AnimatedContent(
+                    targetState = isMessageExpanded,
+                    transitionSpec = {
+                        fadeIn(tween(180)) togetherWith fadeOut(tween(120))
+                    },
+                    label = "messageExpandCta",
+                ) { expanded ->
+                    Text(
+                        text = if (expanded) {
+                            stringResource(R.string.dashboard_show_less)
+                        } else {
+                            stringResource(R.string.dashboard_show_more)
+                        },
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                            isMessageExpanded = !isMessageExpanded
+                        },
+                    )
+                }
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -727,7 +807,7 @@ private fun SuggestionCard(
                     ),
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.weight(1f),
             )
             SmallOverlayIconButton(
@@ -757,7 +837,7 @@ private fun SuggestionCard(
             Text(
                 text = regenLimitExceededText,
                 color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -771,7 +851,7 @@ private fun SuggestionCard(
                     Text(
                         text = stringResource(R.string.dashboard_overlay_new_suggestions),
                         color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelMedium,
                     )
                 } else {
                     Spacer(Modifier.weight(1f))
@@ -787,7 +867,7 @@ private fun SuggestionCard(
                     ) {
                         Text(
                             text = stringResource(R.string.dashboard_overlay_undo),
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelMedium,
                         )
                     }
                 }
@@ -854,7 +934,7 @@ private fun SuggestionCard(
                         Text(
                             text = reply,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodyMedium,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
@@ -890,7 +970,7 @@ private fun SuggestionCard(
                         Text(
                             text = reply,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier
                                 .weight(1f)
                                 .combinedClickable(
@@ -958,6 +1038,7 @@ private fun SuggestionCard(
                         onValueChange = { editedReplyText = it },
                         singleLine = false,
                         maxLines = 4,
+                        textStyle = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(focusRequester),
@@ -1157,7 +1238,7 @@ private fun AppSourceBadge(packageName: String) {
         Text(
             text = appDisplayLabelFor(packageName),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
         )
     }
 }

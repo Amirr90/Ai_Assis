@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,9 +56,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -108,7 +104,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.example.ai_assis.worker.ReplyReminderWorker
 
-private enum class DashboardTab {
+enum class DashboardTab {
     Overview,
     Activity,
     Settings,
@@ -118,6 +114,8 @@ private val DashboardCardShape = RoundedCornerShape(16.dp)
 
 @Composable
 fun HomeScreen(
+    modifier: Modifier = Modifier,
+    selectedTab: DashboardTab,
     viewModel: HomeViewModel,
     onOpenNotificationAccess: () -> Unit,
     onOpenOverlayPermission: () -> Unit,
@@ -174,55 +172,9 @@ fun HomeScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    var selectedTab by rememberSaveable { mutableStateOf(DashboardTab.Overview) }
+    val tabModifier = modifier.fillMaxSize()
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = selectedTab == DashboardTab.Overview,
-                    onClick = { selectedTab = DashboardTab.Overview },
-                    icon = {
-                        Icon(
-                            Icons.Default.Home,
-                            contentDescription = stringResource(R.string.dashboard_tab_overview),
-                        )
-                    },
-                    label = { Text(stringResource(R.string.dashboard_tab_overview)) },
-                )
-                NavigationBarItem(
-                    selected = selectedTab == DashboardTab.Activity,
-                    onClick = { selectedTab = DashboardTab.Activity },
-                    icon = {
-                        Icon(
-                            Icons.Default.List,
-                            contentDescription = stringResource(R.string.dashboard_tab_activity),
-                        )
-                    },
-                    label = { Text(stringResource(R.string.dashboard_tab_activity)) },
-                )
-                NavigationBarItem(
-                    selected = selectedTab == DashboardTab.Settings,
-                    onClick = { selectedTab = DashboardTab.Settings },
-                    icon = {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = stringResource(R.string.dashboard_tab_settings),
-                        )
-                    },
-                    label = { Text(stringResource(R.string.dashboard_tab_settings)) },
-                )
-            }
-        },
-    ) { innerPadding ->
-        val tabModifier = Modifier
-            .fillMaxSize()
-            .padding(innerPadding)
-            .safeDrawingPadding()
-            .padding(horizontal = 20.dp)
-
-        when (selectedTab) {
+    when (selectedTab) {
             DashboardTab.Overview -> HomeOverviewTab(
                 modifier = tabModifier,
                 overlayMeta = overlayMeta,
@@ -276,7 +228,6 @@ fun HomeScreen(
                 context = context,
             )
         }
-    }
 }
 
 @Composable

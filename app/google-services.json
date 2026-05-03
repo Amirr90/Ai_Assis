@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "550370459307",
+    "project_id": "ai-assis-b027e",
+    "storage_bucket": "ai-assis-b027e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:550370459307:android:fdc6c9e67cb955d72301ee",
+        "android_client_info": {
+          "package_name": "com.example.ai_assis"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDneQ7ceCI4DYdZVEHBNMeeVW39h89u32o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

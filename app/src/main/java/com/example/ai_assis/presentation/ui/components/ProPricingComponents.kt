@@ -60,7 +60,7 @@ fun OverlayProPricingTeaser(
             .fillMaxWidth()
             .clickable(onClick = onOpenProUpgrade),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+        color = MaterialTheme.colorScheme.secondaryContainer,
         tonalElevation = 2.dp,
     ) {
         Row(
@@ -85,8 +85,8 @@ fun OverlayProPricingTeaser(
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = stringResource(R.string.pro_pricing_short),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
             }
             Button(onClick = onOpenProUpgrade) {
