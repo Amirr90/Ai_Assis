@@ -56,11 +56,19 @@ import com.example.ai_assis.service.MainAppForegroundTracker
 import com.example.ai_assis.service.NotificationEventBus
 import com.example.ai_assis.service.OverlayService
 import com.example.ai_assis.ui.theme.AI_AssisTheme
+import com.example.ai_assis.payment.RazorpayPaymentRelay
+import com.example.ai_assis.payment.RazorpayPaymentResult
+import com.razorpay.PaymentData
+import com.razorpay.PaymentResultWithDataListener
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
+
+    @Inject
+    lateinit var razorpayPaymentRelay: RazorpayPaymentRelay
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -84,6 +92,30 @@ class MainActivity : ComponentActivity() {
                 AppNav()
             }
         }
+    }
+
+    override fun onPaymentSuccess(razorpayPaymentID: String?, paymentData: PaymentData?) {
+        val orderId = paymentData?.orderId
+        val paymentId = razorpayPaymentID?.takeIf { it.isNotBlank() } ?: paymentData?.paymentId
+        val signature = paymentData?.signature
+        if (orderId.isNullOrBlank() || paymentId.isNullOrBlank() || signature.isNullOrBlank()) {
+            razorpayPaymentRelay.publish(
+                RazorpayPaymentResult.Failure("Missing payment confirmation from Razorpay.", -1),
+            )
+            return
+        }
+        razorpayPaymentRelay.publish(
+            RazorpayPaymentResult.Success(
+                orderId = orderId,
+                paymentId = paymentId,
+                signature = signature,
+            ),
+        )
+    }
+
+    override fun onPaymentError(errorCode: Int, response: String?, paymentData: PaymentData?) {
+        val message = response?.takeIf { it.isNotBlank() } ?: "Payment could not be completed."
+        razorpayPaymentRelay.publish(RazorpayPaymentResult.Failure(message, errorCode))
     }
 
     companion object {

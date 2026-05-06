@@ -6,6 +6,17 @@ import kotlinx.serialization.SerialName
 @Serializable
 data class ReplyResponseDto(
     val choices: List<ChoiceDto> = emptyList(),
+    val usage: UsageDto? = null,
+)
+
+@Serializable
+data class UsageDto(
+    @SerialName("prompt_tokens")
+    val promptTokens: Int = 0,
+    @SerialName("completion_tokens")
+    val completionTokens: Int = 0,
+    @SerialName("total_tokens")
+    val totalTokens: Int = 0,
 )
 
 @Serializable

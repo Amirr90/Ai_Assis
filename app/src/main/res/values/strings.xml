@@ -5,6 +5,12 @@
     <string name="dashboard_tab_activity">Activity</string>
     <string name="dashboard_tab_settings">Settings</string>
     <string name="dashboard_tab_analytics">Analytics</string>
+    <string name="analytics_openai_section_title">OpenAI cumulative usage</string>
+    <string name="analytics_openai_api_calls">Successful requests</string>
+    <string name="analytics_openai_prompt_tokens">Prompt tokens</string>
+    <string name="analytics_openai_completion_tokens">Completion tokens</string>
+    <string name="analytics_openai_total_tokens">Total tokens</string>
+    <string name="analytics_openai_sync_hint">Cumulative totals sync from Firestore after each successful OpenAI reply. Sign in and enable Firebase for live counts.</string>
     <string name="dashboard_monitored_apps">Monitored Apps</string>
     <string name="dashboard_ai_suggestions">AI Suggestions</string>
     <string name="dashboard_enable_ai_keyboard_beta">Enable AI Keyboard (Beta)</string>
@@ -69,8 +75,6 @@
     <string name="pro_upgrade_cta">Upgrade</string>
     <string name="pro_promo_title">Upgrade to Pro</string>
     <string name="pro_billing_coming_soon">Billing will be available in a future update.</string>
-    <!-- Replace with your Firebase web client ID from Firebase Console → Authentication → Sign-in method → Google → Web SDK configuration -->
-    <string name="default_web_client_id"></string>
     <string name="dashboard_user_safe_error_default">Unable to generate suggestions right now. Please try again.</string>
     <string name="dashboard_user_safe_error_rate_limited">Cloud provider is busy right now. Fallback suggestions remain available.</string>
     <string name="dashboard_user_safe_error_cooldown">Cloud providers are cooling down. On-device suggestions remain available.</string>
@@ -152,6 +156,8 @@
     <string name="flow_login_subtitle">Sign in to sync your tone, templates, and smart replies across devices.</string>
     <string name="flow_login_google">Continue with Google</string>
     <string name="flow_login_skip">Skip for now</string>
+    <string name="flow_login_error_admin_restricted">Google sign-in isn’t available for new accounts on this project. Try Skip for now, or ask your admin to allow sign-up (Google Cloud → Identity Platform → User actions).</string>
+    <string name="flow_login_error_generic">Sign-in failed</string>
 
     <!-- Pricing -->
     <string name="pricing_screen_title">Choose your plan</string>
@@ -172,7 +178,7 @@
     <string name="pricing_plan_pro_feature_2">Faster response</string>
     <string name="pricing_plan_pro_feature_3">All tones</string>
     <string name="pricing_plan_credits_title">Pay as you go</string>
-    <string name="pricing_plan_credits_price">₹49 → 500 replies</string>
+    <string name="pricing_plan_credits_price">₹49 → 500 credits</string>
     <string name="pricing_plan_credits_subtitle">No subscription needed</string>
     <string name="pricing_cta_continue">Continue</string>
     <string name="pricing_cta_upgrade">Upgrade Now</string>

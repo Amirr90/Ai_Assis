@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.ai_assis.data.remote.AuthRepository
 import com.example.ai_assis.data.remote.FirestoreUsageRepository
+import com.example.ai_assis.data.remote.model.OpenAiTokenUsage
 import com.example.ai_assis.data.remote.model.UserUsageRecord
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -54,15 +56,58 @@ class UsageManager @Inject constructor(
     }
 
     /**
+     * Persists OpenAI token usage and increments API call count after a successful chat/completions response.
+     */
+    suspend fun recordOpenAiUsage(usage: OpenAiTokenUsage?, chargedApiCall: Boolean) {
+        if (!chargedApiCall) return
+        val uid = authRepository.currentUid() ?: return
+        val prompt = usage?.promptTokens?.toLong() ?: 0L
+        val completion = usage?.completionTokens?.toLong() ?: 0L
+        val total = usage?.totalTokens?.toLong() ?: 0L
+
+        mutex.withLock {
+            // Optimistic local update so Analytics reflects usage instantly.
+            _userRecord.update { current ->
+                current.copy(
+                    openAiApiCalls = current.openAiApiCalls + 1L,
+                    openAiPromptTokensTotal = current.openAiPromptTokensTotal + prompt,
+                    openAiCompletionTokensTotal = current.openAiCompletionTokensTotal + completion,
+                    openAiTotalTokensTotal = current.openAiTotalTokensTotal + total,
+                )
+            }
+        }
+
+        val result = firestoreRepo.recordOpenAiUsage(uid, usage)
+        if (result.isFailure) {
+            mutex.withLock {
+                // Roll back optimistic counters if Firestore persistence fails.
+                _userRecord.update { current ->
+                    current.copy(
+                        openAiApiCalls = (current.openAiApiCalls - 1L).coerceAtLeast(0L),
+                        openAiPromptTokensTotal = (current.openAiPromptTokensTotal - prompt).coerceAtLeast(0L),
+                        openAiCompletionTokensTotal = (current.openAiCompletionTokensTotal - completion).coerceAtLeast(0L),
+                        openAiTotalTokensTotal = (current.openAiTotalTokensTotal - total).coerceAtLeast(0L),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * Server-authoritative check. Returns false if the free limit is exhausted
      * and the user has no active paid subscription.
      */
     suspend fun canUseAI(): Boolean {
         return mutex.withLock {
             val uid = authRepository.currentUid() ?: return@withLock true
+            // Firestore check evaluates activePlanId/entitlements with legacy subscription fallback.
             firestoreRepo.canGenerate(uid)
         }
     }
+
+    fun activePlanId(): String = _userRecord.value.resolvedPlanId()
+
+    fun hasUnlimitedPlanAccess(): Boolean = _userRecord.value.hasUnlimitedSuggestions()
 
     /**
      * Atomically records one suggestion on Firestore and updates the local cache.
@@ -97,17 +142,11 @@ class UsageManager @Inject constructor(
     }
 
     /**
-     * Kept for compatibility — delegates to Firestore subscription write.
-     * Prefer calling [FirestoreUsageRepository.setSubscription] directly from the upgrade flow.
+     * Previously toggled subscription from the device. Paid access is granted only via
+     * Razorpay + Firebase Cloud Functions; this stub remains for callers that referenced the API.
      */
-    suspend fun setProUser(isPro: Boolean) {
-        val uid = authRepository.currentUid() ?: return
-        val plan = if (isPro) {
-            com.example.ai_assis.presentation.ui.screen.PricingPlan.Monthly
-        } else {
-            com.example.ai_assis.presentation.ui.screen.PricingPlan.Free
-        }
-        firestoreRepo.setSubscription(uid, plan)
+    suspend fun setProUser(@Suppress("UNUSED_PARAMETER") isPro: Boolean) {
+        /* no-op — entitlements enforced server-side */
     }
 
     companion object {

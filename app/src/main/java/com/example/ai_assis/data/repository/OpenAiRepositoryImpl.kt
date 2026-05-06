@@ -9,6 +9,6 @@ class OpenAiRepositoryImpl @Inject constructor(
     private val apiService: OpenAiApiService,
 ) : OpenAiRepository {
     override suspend fun getReplies(message: String, tone: ReplyTone): List<String> {
-        return apiService.getReplies(message = message, tone = tone)
+        return apiService.getReplies(message = message, tone = tone).replies
     }
 }

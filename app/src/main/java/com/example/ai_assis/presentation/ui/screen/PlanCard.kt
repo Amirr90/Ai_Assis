@@ -38,10 +38,10 @@ private val CardShape = RoundedCornerShape(18.dp)
 
 @Composable
 fun PlanCard(
-    plan: PricingPlan,
+    plan: PlanUiModel,
     selected: Boolean,
+    active: Boolean,
     onClick: () -> Unit,
-    featured: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -60,7 +60,7 @@ fun PlanCard(
     val backgroundColor by animateColorAsState(
         targetValue = when {
             selected -> scheme.primary.copy(alpha = 0.10f)
-            featured -> scheme.primaryContainer.copy(alpha = 0.35f)
+            plan.isFeatured -> scheme.primaryContainer.copy(alpha = 0.35f)
             else -> scheme.surface.copy(alpha = 0.42f)
         },
         animationSpec = tween(220),
@@ -68,8 +68,8 @@ fun PlanCard(
     )
 
     val targetScale = when {
-        selected && featured -> 1.03f
-        featured -> 1.02f
+        selected && plan.isFeatured -> 1.03f
+        plan.isFeatured -> 1.02f
         selected -> 1.01f
         else -> 1f
     }
@@ -114,7 +114,7 @@ fun PlanCard(
                 color = scheme.onSurface,
             )
             when {
-                plan == PricingPlan.Free -> {
+                active -> {
                     Surface(
                         shape = RoundedCornerShape(50),
                         color = scheme.tertiaryContainer,
@@ -127,7 +127,7 @@ fun PlanCard(
                         )
                     }
                 }
-                featured -> {
+                plan.isFeatured -> {
                     Surface(
                         shape = RoundedCornerShape(50),
                         color = scheme.secondaryContainer,
@@ -145,7 +145,7 @@ fun PlanCard(
 
         PlanPriceBlock(plan = plan)
 
-        val features = planFeatures(plan)
+        val features = plan.features
         if (features.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 features.forEach { line ->
@@ -172,84 +172,22 @@ fun PlanCard(
     }
 }
 
-@Composable
-private fun planTitle(plan: PricingPlan): String = stringResource(
-    when (plan) {
-        PricingPlan.Free -> R.string.pricing_plan_free_title
-        PricingPlan.Monthly -> R.string.pricing_plan_monthly_title
-        PricingPlan.Yearly -> R.string.pricing_plan_yearly_title
-        PricingPlan.Credits -> R.string.pricing_plan_credits_title
-    },
-)
+private fun planTitle(plan: PlanUiModel): String = plan.title
 
 @Composable
-private fun PlanPriceBlock(plan: PricingPlan) {
+private fun PlanPriceBlock(plan: PlanUiModel) {
     val scheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
-    when (plan) {
-        PricingPlan.Free -> { /* no price block */ }
-        PricingPlan.Monthly -> {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = stringResource(R.string.pricing_plan_monthly_price_day),
-                    style = typography.titleSmall,
-                    color = scheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.pricing_plan_monthly_billed),
-                    style = typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                )
-            }
-        }
-        PricingPlan.Yearly -> {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = stringResource(R.string.pricing_plan_yearly_price_day),
-                    style = typography.titleSmall,
-                    color = scheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.pricing_plan_yearly_annual),
-                    style = typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.pricing_plan_yearly_save),
-                    style = typography.labelLarge,
-                    color = scheme.primary,
-                )
-            }
-        }
-        PricingPlan.Credits -> {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = stringResource(R.string.pricing_plan_credits_price),
-                    style = typography.titleSmall,
-                    color = scheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.pricing_plan_credits_subtitle),
-                    style = typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                )
-            }
-        }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = plan.priceText,
+            style = typography.titleSmall,
+            color = scheme.onSurface,
+        )
+        Text(
+            text = plan.subtitle,
+            style = typography.bodySmall,
+            color = scheme.onSurfaceVariant,
+        )
     }
-}
-
-@Composable
-private fun planFeatures(plan: PricingPlan): List<String> = when (plan) {
-    PricingPlan.Free -> listOf(
-        stringResource(R.string.pricing_plan_free_feature_1),
-        stringResource(R.string.pricing_plan_free_feature_2),
-    )
-    PricingPlan.Monthly,
-    PricingPlan.Yearly,
-    -> listOf(
-        stringResource(R.string.pricing_plan_pro_feature_1),
-        stringResource(R.string.pricing_plan_pro_feature_2),
-        stringResource(R.string.pricing_plan_pro_feature_3),
-    )
-    PricingPlan.Credits -> emptyList()
 }

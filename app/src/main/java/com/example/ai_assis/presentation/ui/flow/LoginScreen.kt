@@ -40,6 +40,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.ai_assis.BuildConfig
 import com.example.ai_assis.R
 import com.example.ai_assis.presentation.ui.flow.components.AnnotatedHeadline
 import com.example.ai_assis.presentation.ui.flow.components.FlowBackground
@@ -208,10 +209,10 @@ fun LoginScreen(
                                         val googleCredential = GoogleIdTokenCredential.createFrom(result.credential.data)
                                         viewModel.signInWithGoogle(googleCredential.idToken)
                                     } catch (e: GetCredentialException) {
-                                        Log.w("LoginScreen", "Google Sign-In unavailable: ${e.message}")
+                                        Log.w(BuildConfig.APPLICATION_ID, "Google Sign-In unavailable: ${e.message}")
                                         viewModel.signInAnonymously()
                                     } catch (e: Exception) {
-                                        Log.w("LoginScreen", "Credential error: ${e.message}")
+                                        Log.w(BuildConfig.APPLICATION_ID, "Credential error: ${e.message}")
                                         viewModel.signInAnonymously()
                                     }
                                 }

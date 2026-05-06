@@ -24,9 +24,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.github.mikephil.charting.charts.BarChart
@@ -46,7 +47,8 @@ import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
 import com.github.mikephil.charting.highlight.Highlight
 import com.github.mikephil.charting.listener.OnChartValueSelectedListener
 import androidx.compose.ui.text.font.FontWeight
-import com.example.ai_assis.data.local.UsageManager
+import java.text.NumberFormat
+import com.example.ai_assis.R
 import com.example.ai_assis.data.remote.model.SubscriptionType
 import com.example.ai_assis.data.remote.model.UserUsageRecord
 import com.example.ai_assis.presentation.viewmodel.DailyCount
@@ -71,6 +73,10 @@ fun UsageAnalyticsScreen(
     val last4Weeks by viewModel.last4Weeks.collectAsState()
     val peakDaily by viewModel.peakDailyCount.collectAsState()
     val averagePerDay by viewModel.averagePerDay.collectAsState()
+    val openAiApiCalls by viewModel.openAiApiCalls.collectAsState()
+    val openAiPromptTokens by viewModel.openAiPromptTokensTotal.collectAsState()
+    val openAiCompletionTokens by viewModel.openAiCompletionTokensTotal.collectAsState()
+    val openAiTotalTokens by viewModel.openAiTotalTokensTotal.collectAsState()
 
     val limit = UserUsageRecord.FREE_SUGGESTION_LIMIT
 
@@ -99,6 +105,13 @@ fun UsageAnalyticsScreen(
             creditsRemaining = creditsRemaining,
             todayCount = todayCount,
             limit = limit,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        OpenAiUsageSection(
+            apiCalls = openAiApiCalls,
+            promptTokens = openAiPromptTokens,
+            completionTokens = openAiCompletionTokens,
+            totalTokens = openAiTotalTokens,
         )
         Spacer(modifier = Modifier.height(20.dp))
         FilterChips(
@@ -353,6 +366,83 @@ private fun GraphSection(
             )
         }
     }
+}
+
+@Composable
+private fun OpenAiUsageSection(
+    apiCalls: Long,
+    promptTokens: Long,
+    completionTokens: Long,
+    totalTokens: Long,
+) {
+    val numberFormat = remember { NumberFormat.getIntegerInstance() }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.45f),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.analytics_openai_section_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            OpenAiStatRow(stringResource(R.string.analytics_openai_api_calls), formatCompactNumber(apiCalls, numberFormat))
+            OpenAiStatRow(stringResource(R.string.analytics_openai_prompt_tokens), formatCompactNumber(promptTokens, numberFormat))
+            OpenAiStatRow(
+                stringResource(R.string.analytics_openai_completion_tokens),
+                formatCompactNumber(completionTokens, numberFormat),
+            )
+            OpenAiStatRow(stringResource(R.string.analytics_openai_total_tokens), formatCompactNumber(totalTokens, numberFormat))
+            Text(
+                text = stringResource(R.string.analytics_openai_sync_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun OpenAiStatRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+private fun formatCompactNumber(value: Long, numberFormat: NumberFormat): String {
+    val absValue = kotlin.math.abs(value.toDouble())
+    return when {
+        absValue >= 1_000_000_000 -> formatScaled(value, 1_000_000_000.0, "B")
+        absValue >= 1_000_000 -> formatScaled(value, 1_000_000.0, "M")
+        absValue >= 1_000 -> formatScaled(value, 1_000.0, "K")
+        else -> numberFormat.format(value)
+    }
+}
+
+private fun formatScaled(value: Long, divisor: Double, suffix: String): String {
+    val scaled = value / divisor
+    val oneDecimal = String.format("%.1f", scaled)
+    val compact = oneDecimal.removeSuffix(".0")
+    return "$compact$suffix"
 }
 
 @Composable

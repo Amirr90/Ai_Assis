@@ -95,6 +95,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             )
         }
 
+        // Server-authoritative gate (activePlanId/entitlements, with legacy subscription fallback).
         if (!usageManager.canUseAI()) {
             return Result.failure(DailyAiLimitReachedException())
         }

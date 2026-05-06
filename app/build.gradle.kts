@@ -49,6 +49,12 @@ android {
             "GEMINI_MODEL",
             "\"${localProperties.getProperty("GEMINI_MODEL", "gemini-2.0-flash")}\""
         )
+        buildConfigField(
+            "String",
+            "RAZORPAY_KEY_ID",
+            "\"${localProperties.getProperty("RAZORPAY_KEY_ID", "")}\""
+        )
+
     }
 
     buildTypes {
@@ -75,6 +81,13 @@ android {
     }
 }
 
+configurations.configureEach {
+    resolutionStrategy {
+        // Single version for entire graph; avoids Android Studio requesting missing -sources for 18.4.0.
+        force("com.google.android.gms:play-services-basement:${libs.versions.playServicesBasement.get()}")
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation("androidx.appcompat:appcompat:1.7.0")
@@ -96,6 +109,7 @@ dependencies {
     kapt(libs.hilt.android.compiler)
     implementation(libs.ktor.client.android)
     implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.client.logging)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
@@ -105,6 +119,9 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore)
     implementation(libs.firebase.auth)
+    implementation("com.google.firebase:firebase-functions-ktx")
+    implementation("com.razorpay:checkout:1.6.41")
+    implementation(libs.play.services.basement)
     implementation(libs.play.services.auth)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)

@@ -1,8 +1,10 @@
 package com.example.ai_assis.data.repository
 
 import android.util.Log
+import com.example.ai_assis.BuildConfig
 import com.example.ai_assis.data.local.OnDeviceSuggestionGenerator
 import com.example.ai_assis.data.local.TonePreferencesDataStore
+import com.example.ai_assis.data.local.UsageManager
 import com.example.ai_assis.data.remote.OpenAiApiService
 import com.example.ai_assis.data.remote.SuggestionApiService
 import com.example.ai_assis.data.remote.dto.PromptPolicyDto
@@ -25,6 +27,7 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
     private val openAiApiService: OpenAiApiService,
     private val suggestionApiService: SuggestionApiService,
     private val suggestionMapper: SuggestionMapper,
+    private val usageManager: UsageManager,
 ) : SmartSuggestionRepository {
     private val providerBlockedUntilMs = mutableMapOf<CloudProvider, Long>()
 
@@ -108,7 +111,7 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
         return try {
             val suggestions = when (provider) {
                 CloudProvider.OPEN_AI -> {
-                    val replies = openAiApiService.getReplies(
+                    val openAiResult = openAiApiService.getReplies(
                         message = context.latestMessage,
                         tone = context.tone.toReplyTone(),
                         sender = context.sender,
@@ -117,7 +120,11 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
                         languageHint = context.languageHint,
                         styleHint = context.styleHint,
                     )
-                    replies.map { reply ->
+                    usageManager.recordOpenAiUsage(
+                        usage = openAiResult.usage,
+                        chargedApiCall = openAiResult.chargedApiCall,
+                    )
+                    openAiResult.replies.map { reply ->
                         Suggestion(
                             text = reply.trim(),
                             confidence = 0.85,
@@ -236,6 +243,6 @@ private fun SuggestionTone.toReplyTone(): ReplyTone {
     }
 }
 
-private const val logTag = "SmartAssistant"
+private const val logTag = BuildConfig.APPLICATION_ID
 private const val transientCooldownMs = 2 * 60 * 1_000L
 private const val quotaCooldownMs = 30 * 60 * 1_000L

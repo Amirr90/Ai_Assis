@@ -1,6 +1,7 @@
 package com.example.ai_assis.presentation.ui.screen
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -29,12 +30,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import android.util.Log
 import com.example.ai_assis.R
+import com.example.ai_assis.payment.RazorpayCheckoutStarter
 import com.example.ai_assis.presentation.ui.flow.components.FlowBackground
 import com.example.ai_assis.presentation.viewmodel.UpgradeState
 import com.example.ai_assis.presentation.viewmodel.UpgradeViewModel
@@ -46,20 +50,41 @@ fun PricingScreen(
     modifier: Modifier = Modifier,
     viewModel: UpgradeViewModel = hiltViewModel(),
 ) {
+    val tag = "PricingScreen"
+    val plans by viewModel.plans.collectAsState()
+    val activePlan by viewModel.activePricingPlan.collectAsState()
     var selectedPlan by remember { mutableStateOf(PricingPlan.Free) }
     val scheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val upgradeState by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Navigate away on successful upgrade
+    val activity = LocalContext.current as ComponentActivity
+    LaunchedEffect(activePlan) {
+        selectedPlan = activePlan
+    }
+
+    LaunchedEffect(activity) {
+        viewModel.checkoutSessions.collect { session ->
+            Log.d(
+                tag,
+                "checkoutSessions emit: orderId=${session.orderId}, plan=${session.plan}, amountPaise=${session.amountPaise}, currency=${session.currency}",
+            )
+            RazorpayCheckoutStarter.present(activity, session)
+        }
+    }
+
+    // Navigate away on successful upgrade.
     LaunchedEffect(upgradeState) {
+        Log.d(tag, "upgradeState changed: $upgradeState")
         when (val s = upgradeState) {
             is UpgradeState.Success -> {
+                Log.i(tag, "Upgrade success. Navigating back.")
                 viewModel.resetState()
                 onContinueOrUpgrade()
             }
             is UpgradeState.Error -> {
+                Log.e(tag, "Upgrade error shown to user: ${s.message}")
                 snackbarHostState.showSnackbar(s.message)
                 viewModel.resetState()
             }
@@ -98,34 +123,19 @@ fun PricingScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                PlanCard(
-                    plan = PricingPlan.Free,
-                    selected = selectedPlan == PricingPlan.Free,
-                    onClick = { selectedPlan = PricingPlan.Free },
-                    featured = false,
-                )
-                PlanCard(
-                    plan = PricingPlan.Monthly,
-                    selected = selectedPlan == PricingPlan.Monthly,
-                    onClick = { selectedPlan = PricingPlan.Monthly },
-                    featured = false,
-                )
-                PlanCard(
-                    plan = PricingPlan.Yearly,
-                    selected = selectedPlan == PricingPlan.Yearly,
-                    onClick = { selectedPlan = PricingPlan.Yearly },
-                    featured = true,
-                )
-                PlanCard(
-                    plan = PricingPlan.Credits,
-                    selected = selectedPlan == PricingPlan.Credits,
-                    onClick = { selectedPlan = PricingPlan.Credits },
-                    featured = false,
-                )
+                plans.forEach { planUi ->
+                    PlanCard(
+                        plan = planUi,
+                        selected = selectedPlan == planUi.pricingPlan,
+                        active = activePlan == planUi.pricingPlan,
+                        onClick = { selectedPlan = planUi.pricingPlan },
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                val isLoading = upgradeState is UpgradeState.Loading
+                val isLoading =
+                    upgradeState is UpgradeState.CreatingOrder || upgradeState is UpgradeState.ConfirmingReceipt
                 val ctaText = if (selectedPlan.isPaid()) {
                     stringResource(R.string.pricing_cta_upgrade)
                 } else {
@@ -135,8 +145,14 @@ fun PricingScreen(
                 Button(
                     onClick = {
                         if (selectedPlan.isPaid()) {
-                            viewModel.selectPlan(selectedPlan, creditsToAdd = 50)
+                            val credits = plans.firstOrNull { it.pricingPlan == selectedPlan }?.creditsToAdd ?: 500
+                            Log.d(
+                                tag,
+                                "Upgrade CTA tapped: selectedPlan=$selectedPlan, resolvedCreditsToAdd=$credits, plansLoaded=${plans.size}",
+                            )
+                            viewModel.beginPaidCheckout(selectedPlan, creditsToAdd = credits)
                         } else {
+                            Log.d(tag, "Continue CTA tapped for free plan")
                             onContinueOrUpgrade()
                         }
                     },

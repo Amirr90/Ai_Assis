@@ -4,6 +4,8 @@ import com.example.ai_assis.BuildConfig
 import com.example.ai_assis.data.remote.dto.MessageDto
 import com.example.ai_assis.data.remote.dto.ReplyRequestDto
 import com.example.ai_assis.data.remote.dto.ReplyResponseDto
+import com.example.ai_assis.data.remote.model.OpenAiReplyResult
+import com.example.ai_assis.data.remote.model.OpenAiTokenUsage
 import com.example.ai_assis.domain.model.ReplyTone
 import android.util.Log
 import io.ktor.client.HttpClient
@@ -35,7 +37,7 @@ class OpenAiApiService @Inject constructor(
         compiledConversationContext: String? = null,
         languageHint: String? = null,
         styleHint: String? = null,
-    ): List<String> {
+    ): OpenAiReplyResult {
         val hasApiKey = BuildConfig.OPENAI_KEY.isNotBlank()
         Log.d(logTag, "OpenAI request start. hasApiKey=$hasApiKey tone=${tone.name} sender=${sender ?: "unknown"}")
 
@@ -95,13 +97,21 @@ class OpenAiApiService @Inject constructor(
             val statusCode = exception.response.status.value
             val responseBody = runCatching { exception.response.bodyAsText() }.getOrDefault("<unable_to_read_body>")
             Log.e(logTag, "OpenAI HTTP error. status=$statusCode body=$responseBody")
-            return fallbackReplies(message = message, languageHint = languageHint)
+            return OpenAiReplyResult(
+                replies = fallbackReplies(message = message, languageHint = languageHint),
+                usage = null,
+                chargedApiCall = false,
+            )
         } catch (exception: CancellationException) {
             Log.d(logTag, "OpenAI request cancelled: ${exception.message}")
             throw exception
         } catch (throwable: Throwable) {
             Log.e(logTag, "OpenAI request failed. ${throwable.message}", throwable)
-            return fallbackReplies(message = message, languageHint = languageHint)
+            return OpenAiReplyResult(
+                replies = fallbackReplies(message = message, languageHint = languageHint),
+                usage = null,
+                chargedApiCall = false,
+            )
         }
 
         val responseBody = runCatching { response.bodyAsText() }.getOrDefault("")
@@ -113,8 +123,26 @@ class OpenAiApiService @Inject constructor(
         val parsedResponse = runCatching { json.decodeFromString(ReplyResponseDto.serializer(), responseBody) }
             .getOrElse { parseError ->
                 Log.e(logTag, "OpenAI response parse failed. ${parseError.message}")
-                return fallbackReplies(message = message, languageHint = languageHint)
+                return OpenAiReplyResult(
+                    replies = fallbackReplies(message = message, languageHint = languageHint),
+                    usage = null,
+                    chargedApiCall = true,
+                )
             }
+
+        val usageSnapshot = parsedResponse.usage?.let { u ->
+            OpenAiTokenUsage(
+                promptTokens = u.promptTokens,
+                completionTokens = u.completionTokens,
+                totalTokens = u.totalTokens,
+            )
+        }
+        if (usageSnapshot != null) {
+            Log.d(
+                logTag,
+                "OpenAI usage tokens prompt=${usageSnapshot.promptTokens} completion=${usageSnapshot.completionTokens} total=${usageSnapshot.totalTokens}",
+            )
+        }
 
         val firstChoice = parsedResponse.choices.firstOrNull()
         val content = firstChoice?.message?.content.orEmpty()
@@ -152,11 +180,16 @@ class OpenAiApiService @Inject constructor(
             .toList()
 
         Log.d(logTag, "OpenAI final ranked replies count=${ranked.size} replies=$ranked")
-        return ranked.ifEmpty { fallbackReplies(message = message, languageHint = languageHint) }
+        val finalReplies = ranked.ifEmpty { fallbackReplies(message = message, languageHint = languageHint) }
+        return OpenAiReplyResult(
+            replies = finalReplies,
+            usage = usageSnapshot,
+            chargedApiCall = true,
+        )
     }
 
     private companion object {
-        const val logTag = "SmartAssistant"
+        const val logTag = BuildConfig.APPLICATION_ID
     }
 }
 
