@@ -22,6 +22,8 @@ class GetHybridSuggestionsUseCase @Inject constructor(
     private val getCloudSuggestionsUseCase: GetCloudSuggestionsUseCase,
     private val mediaReplyProvider: MediaReplyProvider,
     private val getLocalFallbackSuggestionsUseCase: GetLocalFallbackSuggestionsUseCase,
+    private val scoreBelievabilityUseCase: ScoreBelievabilityUseCase,
+    private val humanizeSuggestionsUseCase: HumanizeSuggestionsUseCase,
     private val usageManager: UsageManager,
     private val engagementNotificationCoordinator: EngagementNotificationCoordinator,
 ) {
@@ -42,7 +44,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             )
             return Result.success(
                 HybridSuggestionResult(
-                    suggestions = localOnly,
+                    suggestions = finalize(context, localOnly),
                     source = SuggestionSource.ON_DEVICE,
                     fallbackReason = "ai_disabled",
                 ),
@@ -55,7 +57,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             )
             return Result.success(
                 HybridSuggestionResult(
-                    suggestions = mediaSuggestions,
+                    suggestions = finalize(context, mediaSuggestions),
                     source = SuggestionSource.ON_DEVICE,
                     fallbackReason = "media_message",
                 ),
@@ -69,7 +71,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
         if (fallbackReason == null) {
             return Result.success(
                 HybridSuggestionResult(
-                    suggestions = onDeviceSuggestions,
+                    suggestions = finalize(context, onDeviceSuggestions),
                     source = SuggestionSource.ON_DEVICE,
                 ),
             )
@@ -80,7 +82,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
         if (cached != null) {
             return Result.success(
                 HybridSuggestionResult(
-                    suggestions = cached,
+                    suggestions = finalize(context, cached),
                     source = SuggestionSource.CLOUD,
                     fallbackReason = "cached",
                 ),
@@ -90,7 +92,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
         if (isCircuitBreakerOpen()) {
             return Result.success(
                 HybridSuggestionResult(
-                    suggestions = onDeviceSuggestions,
+                    suggestions = finalize(context, onDeviceSuggestions),
                     source = SuggestionSource.ON_DEVICE,
                     fallbackReason = "circuit_breaker_open",
                 ),
@@ -126,7 +128,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                     engagementNotificationCoordinator.onSuccessfulCloudSuggestion()
                     Result.success(
                         HybridSuggestionResult(
-                            suggestions = cloudSuggestions,
+                            suggestions = finalize(context, cloudSuggestions),
                             source = SuggestionSource.CLOUD,
                             fallbackReason = null,
                         ),
@@ -135,7 +137,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                     usageManager.decrementUsage()
                     Result.success(
                         HybridSuggestionResult(
-                            suggestions = onDeviceSuggestions,
+                            suggestions = finalize(context, onDeviceSuggestions),
                             source = SuggestionSource.ON_DEVICE,
                             fallbackReason = "cloud_empty",
                         ),
@@ -149,7 +151,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                 val reasonMessage = throwable?.message.orEmpty()
                 Result.success(
                     HybridSuggestionResult(
-                        suggestions = onDeviceSuggestions,
+                        suggestions = finalize(context, onDeviceSuggestions),
                         source = SuggestionSource.ON_DEVICE,
                         fallbackReason = when {
                             reasonMessage.contains("cloud_error_both_providers_cooldown") -> "cloud_providers_cooldown"
@@ -162,6 +164,13 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                 )
             }
         }
+    }
+
+    private fun finalize(context: ConversationContext, suggestions: List<Suggestion>): List<Suggestion> {
+        val ranked = scoreBelievabilityUseCase(context, suggestions)
+            .map { it.suggestion }
+            .take(3)
+        return humanizeSuggestionsUseCase(context, ranked)
     }
 
     private fun evaluateFallbackReason(

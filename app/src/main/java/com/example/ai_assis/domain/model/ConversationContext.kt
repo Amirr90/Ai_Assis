@@ -29,4 +29,7 @@ data class ConversationContext(
      * Effective cap on recent turns for cloud trimming (plan cap ∧ memory-depth bias).
      */
     val promptTurnCap: Int = 10,
+    val conversationIntelligence: ConversationIntelligence = ConversationIntelligence(),
+    val replyObjective: ReplyObjective = ReplyObjective.KEEP_IT_BRIEF,
+    val feedbackSnapshot: SuggestionFeedbackSnapshot = SuggestionFeedbackSnapshot(),
 )

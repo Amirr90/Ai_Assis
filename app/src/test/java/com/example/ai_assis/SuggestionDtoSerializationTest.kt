@@ -18,6 +18,7 @@ class SuggestionDtoSerializationTest {
             sender = "Bob",
             latestMessage = "Where are you?",
             recentMessages = listOf("Ping"),
+            compiledConversationContext = "Friend: Ping",
             tone = "casual",
             languageHint = "en",
             maxSuggestions = 4,

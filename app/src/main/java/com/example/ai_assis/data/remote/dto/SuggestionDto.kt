@@ -31,6 +31,13 @@ data class PromptPolicyDto(
     val conversationSummary: String = "",
     val continuityAnchors: List<String> = emptyList(),
     val maxCharsPerReply: Int = 120,
+    val socialMode: String = "neutral_chat",
+    val replyObjective: String = "keep_it_brief",
+    val relationshipProfile: String = "unknown",
+    val emotionalIntent: String = "confirmation",
+    val interactionStyle: String = "",
+    val preferredStyle: String = "",
+    val candidateBehaviors: List<String> = emptyList(),
 )
 
 @Serializable

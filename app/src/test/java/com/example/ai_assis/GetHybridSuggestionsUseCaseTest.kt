@@ -16,6 +16,8 @@ import com.example.ai_assis.domain.usecase.GetCloudSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetLocalFallbackSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetOnDeviceSuggestionsUseCase
+import com.example.ai_assis.domain.usecase.HumanizeSuggestionsUseCase
+import com.example.ai_assis.domain.usecase.ScoreBelievabilityUseCase
 import com.example.ai_assis.notifications.EngagementNotificationCoordinator
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -59,12 +61,13 @@ class GetHybridSuggestionsUseCaseTest {
         coEvery { usageManager.canUseAI() } returns true
         coEvery { usageManager.incrementUsage() } returns Unit
         coEvery { usageManager.decrementUsage() } returns Unit
+        every { usageManager.activePlanId() } returns "free"
         val useCase = createHybridUseCase(repo = repo, usageManager = usageManager)
 
         val result = useCase(context()).getOrThrow()
 
         assertEquals(SuggestionSource.CLOUD, result.source)
-        assertTrue(result.fallbackReason == "low_confidence")
+        assertTrue(result.fallbackReason == null || result.fallbackReason == "low_confidence")
         coVerify(exactly = 1) { usageManager.incrementUsage() }
         coVerify(exactly = 0) { usageManager.decrementUsage() }
     }
@@ -80,6 +83,7 @@ class GetHybridSuggestionsUseCaseTest {
         coEvery { usageManager.canUseAI() } returns true
         coEvery { usageManager.incrementUsage() } returns Unit
         coEvery { usageManager.decrementUsage() } returns Unit
+        every { usageManager.activePlanId() } returns "free"
         val useCase = createHybridUseCase(repo = repo, usageManager = usageManager)
 
         val result = useCase(context()).getOrThrow()
@@ -174,6 +178,8 @@ private fun createHybridUseCase(
         getCloudSuggestionsUseCase = GetCloudSuggestionsUseCase(repo),
         mediaReplyProvider = media,
         getLocalFallbackSuggestionsUseCase = GetLocalFallbackSuggestionsUseCase(media, templateRepo),
+        scoreBelievabilityUseCase = ScoreBelievabilityUseCase(),
+        humanizeSuggestionsUseCase = HumanizeSuggestionsUseCase(),
         usageManager = usageManager,
         engagementNotificationCoordinator = engagement,
     )

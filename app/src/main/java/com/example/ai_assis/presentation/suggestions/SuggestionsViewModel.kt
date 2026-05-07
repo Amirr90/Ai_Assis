@@ -2,6 +2,7 @@ package com.example.ai_assis.presentation.suggestions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai_assis.data.local.SuggestionFeedbackEngine
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.domain.model.SuggestionSource
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
@@ -23,6 +24,7 @@ class SuggestionsViewModel @Inject constructor(
     private val repository: SmartSuggestionRepository,
     private val prepareAdaptiveConversationContextUseCase: PrepareAdaptiveConversationContextUseCase,
     private val getHybridSuggestionsUseCase: GetHybridSuggestionsUseCase,
+    private val suggestionFeedbackEngine: SuggestionFeedbackEngine,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(SuggestionsUiState())
     val uiState: StateFlow<SuggestionsUiState> = _uiState.asStateFlow()
@@ -32,6 +34,8 @@ class SuggestionsViewModel @Inject constructor(
 
     private var lastMessage: ChatMessage? = null
     private var lastMessageAt = 0L
+    private var suggestionShownAt = 0L
+    private var selectedForCurrentMessage = false
 
     init {
         viewModelScope.launch {
@@ -65,11 +69,22 @@ class SuggestionsViewModel @Inject constructor(
 
         lastMessage = message
         lastMessageAt = now
+        if (_uiState.value.suggestions.isNotEmpty() && !selectedForCurrentMessage) {
+            viewModelScope.launch {
+                suggestionFeedbackEngine.recordIgnored("${message.appSource}:${message.sender}")
+            }
+        }
+        selectedForCurrentMessage = false
         fetchSuggestions(message)
     }
 
     private fun refreshLastMessage() {
-        lastMessage?.let { fetchSuggestions(it) }
+        lastMessage?.let {
+            viewModelScope.launch {
+                suggestionFeedbackEngine.recordRegenerated("${it.appSource}:${it.sender}")
+            }
+            fetchSuggestions(it)
+        }
     }
 
     private fun fetchSuggestions(message: ChatMessage) {
@@ -97,6 +112,7 @@ class SuggestionsViewModel @Inject constructor(
 
             getHybridSuggestionsUseCase(context).fold(
                 onSuccess = { result ->
+                    suggestionShownAt = System.currentTimeMillis()
                     _uiState.value = _uiState.value.copy(
                         suggestions = result.suggestions.map { SuggestionUiModel(it.text, it.confidence) },
                         source = if (result.source == SuggestionSource.CLOUD) {
@@ -120,6 +136,15 @@ class SuggestionsViewModel @Inject constructor(
 
     private fun emitCopyEffect(text: String) {
         viewModelScope.launch {
+            val message = lastMessage
+            if (message != null) {
+                selectedForCurrentMessage = true
+                suggestionFeedbackEngine.recordSelection(
+                    chatKey = "${message.appSource}:${message.sender}",
+                    text = text,
+                    latencyMs = System.currentTimeMillis() - suggestionShownAt,
+                )
+            }
             _effects.emit(SuggestionsEffect.CopyToClipboard(text))
         }
     }

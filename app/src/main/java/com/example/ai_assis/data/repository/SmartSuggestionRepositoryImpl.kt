@@ -18,6 +18,7 @@ import com.example.ai_assis.domain.model.ReplyLength
 import com.example.ai_assis.domain.model.Suggestion
 import com.example.ai_assis.domain.model.SuggestionSource
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
+import com.example.ai_assis.domain.usecase.BuildCandidateBehaviorsUseCase
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 
@@ -29,6 +30,7 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
     private val usageManager: UsageManager,
 ) : SmartSuggestionRepository {
     private val providerBlockedUntilMs = mutableMapOf<CloudProvider, Long>()
+    private val buildCandidateBehaviorsUseCase = BuildCandidateBehaviorsUseCase()
 
     override suspend fun getOnDeviceSuggestions(context: ConversationContext): Result<List<Suggestion>> {
         return runCatching { onDeviceSuggestionGenerator.generate(context) }
@@ -62,10 +64,11 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
             latestMessage = currentMessage,
         )
         val orderedProviders = orderedProviders()
+        val candidateBehaviors = buildCandidateBehaviorsUseCase(context).map { it.name.lowercase() }
         val promptPolicy = PromptPolicyBuilder.geminiPromptPolicy(requestContext)
         Log.d(
             logTag,
-            "Cloud suggestion fetch start sender=${context.sender} app=${context.appPackage} providers=$orderedProviders recentCount=${recentMessages.size} plan=${contextWindowPolicy.planId}",
+            "Cloud suggestion fetch start sender=${context.sender} app=${context.appPackage} providers=$orderedProviders recentCount=${recentMessages.size} plan=${contextWindowPolicy.planId} behaviors=$candidateBehaviors objective=${context.replyObjective.name.lowercase()}",
         )
 
         var lastError: Throwable? = null
@@ -129,6 +132,7 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
     ): Result<List<Suggestion>> {
         return try {
             val maxChars = PromptPolicyBuilder.effectiveMaxChars(context)
+            val candidateBehaviors = buildCandidateBehaviorsUseCase(context).map { it.name.lowercase() }
             val suggestions = when (provider) {
                 CloudProvider.OPEN_AI -> {
                     val openAiResult = openAiApiService.getRepliesAdaptive(
@@ -162,7 +166,7 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
                             latestMessage = context.latestMessage,
                             recentMessages = emptyList(),
                             compiledConversationContext = compiledConversationContext,
-                            tone = "adaptive",
+                            tone = "adaptive:${context.replyObjective.name.lowercase()}:${candidateBehaviors.joinToString(",")}",
                             languageHint = context.languageHint,
                             maxSuggestions = maxSuggestionCount(context.replyLength),
                             promptPolicy = promptPolicy,

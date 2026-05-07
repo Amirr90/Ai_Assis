@@ -2,6 +2,7 @@ package com.example.ai_assis
 
 import com.example.ai_assis.data.local.ConversationMemoryStore
 import com.example.ai_assis.data.local.MediaReplyProvider
+import com.example.ai_assis.data.local.SuggestionFeedbackEngine
 import com.example.ai_assis.data.local.UsageManager
 import com.example.ai_assis.domain.model.AdaptiveConversationProfile
 import com.example.ai_assis.domain.model.ChatMessage
@@ -17,7 +18,9 @@ import com.example.ai_assis.domain.usecase.GetCloudSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetLocalFallbackSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.GetOnDeviceSuggestionsUseCase
+import com.example.ai_assis.domain.usecase.HumanizeSuggestionsUseCase
 import com.example.ai_assis.domain.usecase.PrepareAdaptiveConversationContextUseCase
+import com.example.ai_assis.domain.usecase.ScoreBelievabilityUseCase
 import com.example.ai_assis.notifications.EngagementNotificationCoordinator
 import com.example.ai_assis.presentation.suggestions.SuggestionsEvent
 import com.example.ai_assis.presentation.suggestions.SuggestionsViewModel
@@ -74,6 +77,7 @@ class SuggestionsViewModelTest {
             repository = repo,
             prepareAdaptiveConversationContextUseCase = prepare,
             getHybridSuggestionsUseCase = vmHybridUseCase(repo),
+            suggestionFeedbackEngine = SuggestionFeedbackEngine(),
         )
 
         vm.onEvent(
@@ -105,6 +109,8 @@ private fun vmHybridUseCase(repo: SmartSuggestionRepository): GetHybridSuggestio
         getCloudSuggestionsUseCase = GetCloudSuggestionsUseCase(repo),
         mediaReplyProvider = media,
         getLocalFallbackSuggestionsUseCase = GetLocalFallbackSuggestionsUseCase(media, templateRepo),
+        scoreBelievabilityUseCase = ScoreBelievabilityUseCase(),
+        humanizeSuggestionsUseCase = HumanizeSuggestionsUseCase(),
         usageManager = usageManager,
         engagementNotificationCoordinator = engagement,
     )

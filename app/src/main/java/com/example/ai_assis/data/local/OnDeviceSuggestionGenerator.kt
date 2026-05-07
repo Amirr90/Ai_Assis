@@ -3,9 +3,12 @@ package com.example.ai_assis.data.local
 import com.example.ai_assis.domain.model.ConversationContext
 import com.example.ai_assis.domain.model.Suggestion
 import com.example.ai_assis.domain.model.SuggestionSource
+import com.example.ai_assis.domain.usecase.BuildCandidateBehaviorsUseCase
 import javax.inject.Inject
 
 class OnDeviceSuggestionGenerator @Inject constructor() {
+    private val behaviorBuilder = BuildCandidateBehaviorsUseCase()
+
     fun generate(context: ConversationContext): List<Suggestion> {
         val text = context.latestMessage.lowercase()
         val isHindiScript = context.latestMessage.any { it.code in 0x0900..0x097F }
@@ -145,14 +148,34 @@ class OnDeviceSuggestionGenerator @Inject constructor() {
             isHinglish = isHinglish,
         )
 
+        val behaviors = behaviorBuilder(context)
+        val objectivePrefix = when (context.replyObjective) {
+            com.example.ai_assis.domain.model.ReplyObjective.CONTINUE_BANTER -> "haha "
+            com.example.ai_assis.domain.model.ReplyObjective.PROVIDE_REASSURANCE -> "it's okay, "
+            com.example.ai_assis.domain.model.ReplyObjective.CONFIRM_PLAN -> "done, "
+            com.example.ai_assis.domain.model.ReplyObjective.RESOLVE_TENSION -> "sorry, "
+            com.example.ai_assis.domain.model.ReplyObjective.KEEP_IT_BRIEF -> ""
+        }
+        val augmentedReplies = styledReplies.flatMap { base ->
+            behaviors.take(2).map { behavior ->
+                when (behavior) {
+                    com.example.ai_assis.domain.model.CandidateBehavior.TEASING -> "$objectivePrefix$base 😄"
+                    com.example.ai_assis.domain.model.CandidateBehavior.EMOTIONALLY_WARM -> "$objectivePrefix$base"
+                    com.example.ai_assis.domain.model.CandidateBehavior.PLAYFUL_ESCALATION -> "$objectivePrefix$base 😉"
+                    com.example.ai_assis.domain.model.CandidateBehavior.DRY_FUNNY -> base.removeSuffix(".")
+                    com.example.ai_assis.domain.model.CandidateBehavior.SUBTLE_FLIRT -> "$objectivePrefix$base 🙂"
+                    com.example.ai_assis.domain.model.CandidateBehavior.NEUTRAL_SAFE -> "$objectivePrefix$base"
+                }.trim()
+            }
+        }.distinct()
         val cap = context.replyLength.maxChars.coerceIn(40, 400)
-        return styledReplies.map {
+        return augmentedReplies.map {
             Suggestion(
                 text = it.take(cap),
                 confidence = confidence,
                 source = SuggestionSource.ON_DEVICE,
             )
-        }
+        }.take(6)
     }
 }
 
