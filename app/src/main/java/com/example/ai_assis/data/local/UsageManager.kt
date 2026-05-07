@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
@@ -148,6 +149,11 @@ class UsageManager @Inject constructor(
     suspend fun setProUser(@Suppress("UNUSED_PARAMETER") isPro: Boolean) {
         /* no-op — entitlements enforced server-side */
     }
+
+    /** Today’s smart-reply count as reflected in local cache (incrementUsage / Firestore sync). */
+    @Suppress("MemberVisibilityCanBePrivate")
+    suspend fun todayCountForUi(): Int =
+        context.usageLimitsDataStore.data.first()[localDailyCountKey] ?: 0
 
     companion object {
         /** Kept for UI references (e.g. progress bar max). */

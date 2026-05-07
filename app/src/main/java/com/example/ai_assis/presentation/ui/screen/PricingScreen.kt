@@ -10,16 +10,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +42,7 @@ import com.example.ai_assis.ui.theme.AI_AssisTheme
 @Composable
 fun PricingScreen(
     onContinueOrUpgrade: () -> Unit,
+    onUpgradeSuccess: (planId: String, amountPaise: Long, currency: String, creditsToAdd: Int, orderId: String, paymentId: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: UpgradeViewModel = hiltViewModel(),
 ) {
@@ -57,7 +53,7 @@ fun PricingScreen(
     val scheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val upgradeState by viewModel.state.collectAsState()
-    val snackbarHostState = remember { SnackbarHostState() }
+    var failedDialogMessage by remember { mutableStateOf<String?>(null) }
 
     val activity = LocalContext.current as ComponentActivity
     LaunchedEffect(activePlan) {
@@ -79,13 +75,20 @@ fun PricingScreen(
         Log.d(tag, "upgradeState changed: $upgradeState")
         when (val s = upgradeState) {
             is UpgradeState.Success -> {
-                Log.i(tag, "Upgrade success. Navigating back.")
+                Log.i(tag, "Upgrade success. Opening success screen.")
                 viewModel.resetState()
-                onContinueOrUpgrade()
+                onUpgradeSuccess(
+                    s.purchase.planId,
+                    s.purchase.amountPaise,
+                    s.purchase.currency,
+                    s.purchase.creditsToAdd,
+                    s.purchase.orderId,
+                    s.purchase.paymentId,
+                )
             }
             is UpgradeState.Error -> {
                 Log.e(tag, "Upgrade error shown to user: ${s.message}")
-                snackbarHostState.showSnackbar(s.message)
+                failedDialogMessage = s.message
                 viewModel.resetState()
             }
             else -> Unit
@@ -123,68 +126,62 @@ fun PricingScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                plans.forEach { planUi ->
+                val displayPlans = plans
+                    .filter { it.pricingPlan != PricingPlan.Free }
+                    .sortedBy { it.sortOrder }
+
+                displayPlans.forEach { planUi ->
                     PlanCard(
                         plan = planUi,
                         selected = selectedPlan == planUi.pricingPlan,
                         active = activePlan == planUi.pricingPlan,
-                        onClick = { selectedPlan = planUi.pricingPlan },
+                        isLoading = upgradeState is UpgradeState.CreatingOrder || upgradeState is UpgradeState.ConfirmingReceipt,
+                        onSelect = { selectedPlan = planUi.pricingPlan },
+                        onBuyClick = {
+                            selectedPlan = planUi.pricingPlan
+                            if (planUi.pricingPlan.isPaid()) {
+                                val credits = plans.firstOrNull { it.pricingPlan == planUi.pricingPlan }?.creditsToAdd ?: 500
+                                Log.d(
+                                    tag,
+                                    "Card CTA tapped: selectedPlan=${planUi.pricingPlan}, resolvedCreditsToAdd=$credits, plansLoaded=${plans.size}",
+                                )
+                                viewModel.beginPaidCheckout(planUi.pricingPlan, creditsToAdd = credits)
+                            } else {
+                                Log.d(tag, "Card CTA tapped for free plan")
+                                onContinueOrUpgrade()
+                            }
+                        },
                     )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                val isLoading =
-                    upgradeState is UpgradeState.CreatingOrder || upgradeState is UpgradeState.ConfirmingReceipt
-                val ctaText = if (selectedPlan.isPaid()) {
-                    stringResource(R.string.pricing_cta_upgrade)
-                } else {
-                    stringResource(R.string.pricing_cta_continue)
-                }
-
-                Button(
-                    onClick = {
-                        if (selectedPlan.isPaid()) {
-                            val credits = plans.firstOrNull { it.pricingPlan == selectedPlan }?.creditsToAdd ?: 500
-                            Log.d(
-                                tag,
-                                "Upgrade CTA tapped: selectedPlan=$selectedPlan, resolvedCreditsToAdd=$credits, plansLoaded=${plans.size}",
-                            )
-                            viewModel.beginPaidCheckout(selectedPlan, creditsToAdd = credits)
-                        } else {
-                            Log.d(tag, "Continue CTA tapped for free plan")
-                            onContinueOrUpgrade()
-                        }
-                    },
-                    enabled = !isLoading,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = scheme.primary,
-                        contentColor = scheme.onPrimary,
-                    ),
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = scheme.onPrimary,
-                        )
-                    } else {
-                        Text(
-                            text = ctaText,
-                            style = typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
+                TextButton(onClick = onContinueOrUpgrade) {
+                    Text(
+                        text = stringResource(R.string.pricing_cta_continue),
+                        style = typography.labelLarge,
+                        color = scheme.onSurfaceVariant,
+                    )
                 }
             }
         }
 
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-        )
+        val errorMessage = failedDialogMessage
+        if (errorMessage != null) {
+            AlertDialog(
+                onDismissRequest = { failedDialogMessage = null },
+                title = { Text(text = stringResource(R.string.payment_failed_title)) },
+                text = { Text(text = errorMessage) },
+                confirmButton = {
+                    TextButton(onClick = { failedDialogMessage = null }) {
+                        Text(text = stringResource(R.string.payment_failed_retry))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { failedDialogMessage = null }) {
+                        Text(text = stringResource(R.string.payment_failed_close))
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -192,6 +189,6 @@ fun PricingScreen(
 @Composable
 private fun PricingScreenPreview() {
     AI_AssisTheme {
-        PricingScreen(onContinueOrUpgrade = {})
+        PricingScreen(onContinueOrUpgrade = {}, onUpgradeSuccess = { _, _, _, _, _, _ -> })
     }
 }

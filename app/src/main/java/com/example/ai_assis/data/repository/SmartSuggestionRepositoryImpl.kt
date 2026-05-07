@@ -3,26 +3,25 @@ package com.example.ai_assis.data.repository
 import android.util.Log
 import com.example.ai_assis.BuildConfig
 import com.example.ai_assis.data.local.OnDeviceSuggestionGenerator
-import com.example.ai_assis.data.local.TonePreferencesDataStore
+import com.example.ai_assis.data.prompt.PromptPolicyBuilder
 import com.example.ai_assis.data.local.UsageManager
 import com.example.ai_assis.data.remote.OpenAiApiService
 import com.example.ai_assis.data.remote.SuggestionApiService
+import com.example.ai_assis.data.remote.model.PlanIds
 import com.example.ai_assis.data.remote.dto.PromptPolicyDto
 import com.example.ai_assis.data.remote.dto.SuggestionGenerateRequestDto
 import com.example.ai_assis.data.mapper.SuggestionMapper
-import com.example.ai_assis.domain.model.ReplyTone
+import com.example.ai_assis.domain.model.ConversationTurn
+import com.example.ai_assis.domain.model.MessageDirection
 import com.example.ai_assis.domain.model.ConversationContext
 import com.example.ai_assis.domain.model.ReplyLength
 import com.example.ai_assis.domain.model.Suggestion
 import com.example.ai_assis.domain.model.SuggestionSource
-import com.example.ai_assis.domain.model.SuggestionTone
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.Flow
 
 class SmartSuggestionRepositoryImpl @Inject constructor(
-    private val tonePreferencesDataStore: TonePreferencesDataStore,
     private val onDeviceSuggestionGenerator: OnDeviceSuggestionGenerator,
     private val openAiApiService: OpenAiApiService,
     private val suggestionApiService: SuggestionApiService,
@@ -37,16 +36,36 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
 
     override suspend fun getCloudSuggestions(context: ConversationContext): Result<List<Suggestion>> {
         val cloudStartMs = System.currentTimeMillis()
-        val recentMessages = context.recentMessages.takeLast(8)
-        val compiledConversationContext = buildCompiledConversationContext(
-            sender = context.sender,
-            recentMessages = recentMessages,
-            latestMessage = context.latestMessage,
+        val contextWindowPolicy = ContextWindowPolicy.resolve(usageManager.activePlanId())
+        val effectiveMaxTurns = minOf(contextWindowPolicy.maxTurns, context.promptTurnCap)
+        val effectiveMaxChars = minOf(
+            contextWindowPolicy.maxHistoryChars,
+            estimateCharBudgetForTurns(effectiveMaxTurns),
+        )
+        val policyForSelection = ContextWindowPolicy(
+            planId = contextWindowPolicy.planId,
+            maxTurns = effectiveMaxTurns,
+            maxHistoryChars = effectiveMaxChars,
+        )
+
+        val normalizedTurns = context.recentTurns.ifEmpty {
+            context.recentMessages.map { ConversationTurn(text = it, direction = MessageDirection.UNKNOWN) }
+        }
+        val selectedTurns = selectTurnsForPrompt(
+            turns = normalizedTurns,
+            policy = policyForSelection,
+        )
+        val compiledConversationContext = formatConversationHistory(selectedTurns)
+        val recentMessages = selectedTurns.map { it.text }
+        val currentMessage = selectedTurns.lastOrNull()?.text ?: context.latestMessage
+        val requestContext = context.copy(
+            latestMessage = currentMessage,
         )
         val orderedProviders = orderedProviders()
+        val promptPolicy = PromptPolicyBuilder.geminiPromptPolicy(requestContext)
         Log.d(
             logTag,
-            "Cloud suggestion fetch start sender=${context.sender} app=${context.appPackage} providers=$orderedProviders recentCount=${recentMessages.size}",
+            "Cloud suggestion fetch start sender=${context.sender} app=${context.appPackage} providers=$orderedProviders recentCount=${recentMessages.size} plan=${contextWindowPolicy.planId}",
         )
 
         var lastError: Throwable? = null
@@ -61,9 +80,9 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
             val providerStartMs = System.currentTimeMillis()
             val result = fetchCloudSuggestions(
                 provider = provider,
-                context = context,
-                recentMessages = recentMessages,
+                context = requestContext,
                 compiledConversationContext = compiledConversationContext,
+                promptPolicy = promptPolicy,
             )
             result.onSuccess { suggestions ->
                 if (suggestions.isNotEmpty()) {
@@ -105,28 +124,29 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
     private suspend fun fetchCloudSuggestions(
         provider: CloudProvider,
         context: ConversationContext,
-        recentMessages: List<String>,
         compiledConversationContext: String,
+        promptPolicy: PromptPolicyDto,
     ): Result<List<Suggestion>> {
         return try {
+            val maxChars = PromptPolicyBuilder.effectiveMaxChars(context)
             val suggestions = when (provider) {
                 CloudProvider.OPEN_AI -> {
-                    val openAiResult = openAiApiService.getReplies(
-                        message = context.latestMessage,
-                        tone = context.tone.toReplyTone(),
-                        sender = context.sender,
-                        recentMessages = recentMessages,
+                    val openAiResult = openAiApiService.getRepliesAdaptive(
+                        context = context,
                         compiledConversationContext = compiledConversationContext,
-                        languageHint = context.languageHint,
-                        styleHint = context.styleHint,
                     )
                     usageManager.recordOpenAiUsage(
                         usage = openAiResult.usage,
                         chargedApiCall = openAiResult.chargedApiCall,
                     )
+                    if (!openAiResult.chargedApiCall) {
+                        return Result.failure(
+                            IllegalStateException("cloud_error_open_ai_synthetic_fallback"),
+                        )
+                    }
                     openAiResult.replies.map { reply ->
                         Suggestion(
-                            text = reply.trim(),
+                            text = reply.trim().take(maxChars),
                             confidence = 0.85,
                             source = SuggestionSource.CLOUD,
                         )
@@ -140,19 +160,19 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
                             appPackage = context.appPackage,
                             sender = context.sender,
                             latestMessage = context.latestMessage,
-                            recentMessages = recentMessages,
+                            recentMessages = emptyList(),
                             compiledConversationContext = compiledConversationContext,
-                            tone = context.tone.name,
+                            tone = "adaptive",
                             languageHint = context.languageHint,
                             maxSuggestions = maxSuggestionCount(context.replyLength),
-                            promptPolicy = PromptPolicyDto(),
+                            promptPolicy = promptPolicy,
                         ),
                     )
                     suggestionMapper.fromCloudResponse(response).map { suggestion ->
-                        suggestion.copy(text = suggestion.text.take(context.replyLength.maxChars))
+                        suggestion.copy(text = suggestion.text.take(maxChars))
                     }
                 }
-            }.take(3)
+            }.take(3).map { it.copy(text = it.text.trim()) }
             Result.success(suggestions)
         } catch (exception: CancellationException) {
             throw exception
@@ -160,12 +180,6 @@ class SmartSuggestionRepositoryImpl @Inject constructor(
             Result.failure(throwable)
         }
     }
-
-    override suspend fun saveTone(tone: SuggestionTone) {
-        tonePreferencesDataStore.saveTone(tone)
-    }
-
-    override fun observeTone(): Flow<SuggestionTone> = tonePreferencesDataStore.observeTone()
 
     private fun orderedProviders(): List<CloudProvider> {
         return listOf(CloudProvider.OPEN_AI, CloudProvider.GEMINI)
@@ -216,33 +230,68 @@ private enum class CloudProvider {
     OPEN_AI,
 }
 
-private fun buildCompiledConversationContext(
-    sender: String,
-    recentMessages: List<String>,
-    latestMessage: String,
-): String {
-    val contextLines = recentMessages
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-        .mapIndexed { index, text ->
-            val role = if (index % 2 == 0) "CONTACT($sender)" else "USER"
-            "$role: $text"
+private fun selectTurnsForPrompt(
+    turns: List<ConversationTurn>,
+    policy: ContextWindowPolicy,
+): List<ConversationTurn> {
+    val dedupedTurns = turns
+        .map { it.copy(text = it.text.trim()) }
+        .filter { it.text.isNotBlank() }
+        .filterNot { it.isSystemLike() }
+        .fold(mutableListOf<ConversationTurn>()) { acc, turn ->
+            if (acc.lastOrNull()?.let { it.direction == turn.direction && it.text == turn.text } == true) {
+                acc
+            } else {
+                acc += turn
+                acc
+            }
         }
-        .toMutableList()
 
-    contextLines += "CONTACT($sender): ${latestMessage.trim()}"
-    return contextLines.joinToString(separator = "\n")
+    val windowed = dedupedTurns.takeLast(policy.maxTurns)
+    var selected = windowed
+    while (selected.joinToString("\n") { it.text }.length > policy.maxHistoryChars && selected.size > 1) {
+        selected = selected.drop(1)
+    }
+    return selected
 }
 
-private fun SuggestionTone.toReplyTone(): ReplyTone {
-    return when (this) {
-        SuggestionTone.CASUAL -> ReplyTone.CASUAL
-        SuggestionTone.PROFESSIONAL -> ReplyTone.PROFESSIONAL
-        SuggestionTone.SHORT -> ReplyTone.SHORT
-        SuggestionTone.HUMOROUS -> ReplyTone.FUNNY
+private fun formatConversationHistory(turns: List<ConversationTurn>): String {
+    return turns.joinToString(separator = "\n") { turn ->
+        val label = when (turn.direction) {
+            MessageDirection.OUTGOING_SELF -> "You"
+            MessageDirection.INCOMING, MessageDirection.UNKNOWN -> "Friend"
+        }
+        "$label: ${turn.text}"
     }
+}
+
+private fun ConversationTurn.isSystemLike(): Boolean {
+    val lower = text.lowercase()
+    return lower.startsWith("system:") ||
+        lower.contains("missed call") ||
+        lower.contains("notification")
+}
+
+private fun estimateCharBudgetForTurns(turns: Int): Int {
+    return (turns * 130).coerceIn(380, 2000)
 }
 
 private const val logTag = BuildConfig.APPLICATION_ID
 private const val transientCooldownMs = 2 * 60 * 1_000L
 private const val quotaCooldownMs = 30 * 60 * 1_000L
+
+private data class ContextWindowPolicy(
+    val planId: String,
+    val maxTurns: Int,
+    val maxHistoryChars: Int,
+) {
+    companion object {
+        fun resolve(planId: String): ContextWindowPolicy {
+            return when (planId) {
+                PlanIds.MONTHLY, PlanIds.YEARLY -> ContextWindowPolicy(planId = planId, maxTurns = 10, maxHistoryChars = 1300)
+                PlanIds.CREDITS -> ContextWindowPolicy(planId = planId, maxTurns = 7, maxHistoryChars = 850)
+                else -> ContextWindowPolicy(planId = PlanIds.FREE, maxTurns = 5, maxHistoryChars = 550)
+            }
+        }
+    }
+}

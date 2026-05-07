@@ -2,14 +2,11 @@ package com.example.ai_assis.presentation.suggestions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.ai_assis.data.local.ConversationCacheDataSource
 import com.example.ai_assis.domain.model.ChatMessage
-import com.example.ai_assis.domain.model.MessageType
 import com.example.ai_assis.domain.model.SuggestionSource
-import com.example.ai_assis.domain.model.SuggestionTone
 import com.example.ai_assis.domain.repository.SmartSuggestionRepository
-import com.example.ai_assis.domain.usecase.BuildConversationContextUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
+import com.example.ai_assis.domain.usecase.PrepareAdaptiveConversationContextUseCase
 import com.example.ai_assis.service.NotificationEventBus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -24,8 +21,7 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class SuggestionsViewModel @Inject constructor(
     private val repository: SmartSuggestionRepository,
-    private val cacheDataSource: ConversationCacheDataSource,
-    private val buildConversationContextUseCase: BuildConversationContextUseCase,
+    private val prepareAdaptiveConversationContextUseCase: PrepareAdaptiveConversationContextUseCase,
     private val getHybridSuggestionsUseCase: GetHybridSuggestionsUseCase,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(SuggestionsUiState())
@@ -39,11 +35,6 @@ class SuggestionsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            repository.observeTone().collect { tone ->
-                _uiState.value = _uiState.value.copy(tone = tone)
-            }
-        }
-        viewModelScope.launch {
             NotificationEventBus.events.collect { message ->
                 onEvent(SuggestionsEvent.NewMessageArrived(message))
             }
@@ -53,7 +44,6 @@ class SuggestionsViewModel @Inject constructor(
     fun onEvent(event: SuggestionsEvent) {
         when (event) {
             is SuggestionsEvent.NewMessageArrived -> handleNewMessage(event.chatMessage)
-            is SuggestionsEvent.ToneChanged -> saveTone(event.tone)
             is SuggestionsEvent.SuggestionClicked -> emitCopyEffect(event.text)
             SuggestionsEvent.RefreshSuggestions -> refreshLastMessage()
             SuggestionsEvent.DismissError -> _uiState.value = _uiState.value.copy(errorMessage = null)
@@ -84,8 +74,6 @@ class SuggestionsViewModel @Inject constructor(
 
     private fun fetchSuggestions(message: ChatMessage) {
         viewModelScope.launch {
-            cacheDataSource.appendMessage(message)
-            val recent = cacheDataSource.recentMessages(message.appSource, message.sender)
             _uiState.value = _uiState.value.copy(
                 latestMessage = message.message,
                 senderName = message.sender,
@@ -94,11 +82,18 @@ class SuggestionsViewModel @Inject constructor(
                 errorMessage = null,
             )
 
-            val context = buildConversationContextUseCase(
-                message = message,
-                tone = _uiState.value.tone,
-                recentMessages = recent,
-            )
+            val context = runCatching {
+                prepareAdaptiveConversationContextUseCase(
+                    message = message,
+                    highQualityMode = false,
+                )
+            }.getOrElse { throwable ->
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    errorMessage = throwable.message ?: "Unable to build context",
+                )
+                return@launch
+            }
 
             getHybridSuggestionsUseCase(context).fold(
                 onSuccess = { result ->
@@ -123,12 +118,6 @@ class SuggestionsViewModel @Inject constructor(
         }
     }
 
-    private fun saveTone(tone: SuggestionTone) {
-        viewModelScope.launch {
-            repository.saveTone(tone)
-        }
-    }
-
     private fun emitCopyEffect(text: String) {
         viewModelScope.launch {
             _effects.emit(SuggestionsEffect.CopyToClipboard(text))
@@ -140,13 +129,13 @@ class SuggestionsViewModel @Inject constructor(
     }
 }
 
-private fun MessageType.toMediaTypeLabel(): String? {
+private fun com.example.ai_assis.domain.model.MessageType.toMediaTypeLabel(): String? {
     return when (this) {
-        MessageType.TEXT -> null
-        MessageType.REEL -> "Reel received - quick replies only"
-        MessageType.IMAGE -> "Photo received - quick replies only"
-        MessageType.VIDEO -> "Video received - quick replies only"
-        MessageType.AUDIO -> "Audio received - quick replies only"
-        MessageType.STICKER -> "Sticker received - quick replies only"
+        com.example.ai_assis.domain.model.MessageType.TEXT -> null
+        com.example.ai_assis.domain.model.MessageType.REEL -> "Reel received - quick replies only"
+        com.example.ai_assis.domain.model.MessageType.IMAGE -> "Photo received - quick replies only"
+        com.example.ai_assis.domain.model.MessageType.VIDEO -> "Video received - quick replies only"
+        com.example.ai_assis.domain.model.MessageType.AUDIO -> "Audio received - quick replies only"
+        com.example.ai_assis.domain.model.MessageType.STICKER -> "Sticker received - quick replies only"
     }
 }

@@ -51,24 +51,24 @@ class OnDeviceSuggestionGenerator @Inject constructor() {
             text.hasAny("where", "kaha", "location", "kidhar") -> {
                 when {
                     isHindiScript -> listOf("लोकेशन भेज रहा हूँ।", "मैं पास ही हूँ।", "बस पहुँचने वाला हूँ।")
-                    isHinglish -> listOf("Location bhej raha hoon.", "Main nearby hoon.", "Bas pahuchne wala hoon.")
+                    isHinglish -> listOf("location bhej raha hoon.", "main nearby hoon.", "bas pahuchne wala hoon.")
                     else -> listOf("Sharing location.", "I am nearby.", "Almost there.")
                 }
             }
 
             text.hasAny("meet", "milna", "kab aoge", "aoge", "meeting") -> {
                 when {
-                    isHindiScript -> listOf("मैं आ जाऊँगा।", "5 बजे मिलें?", "क्या थोड़ा reschedule कर सकते हैं?")
-                    isHinglish -> listOf("Main aa jaunga.", "5 baje milte hain?", "Thoda reschedule kar sakte hain?")
-                    else -> listOf("I'll be there.", "Let's meet at 5?", "Can we reschedule?")
+                    isHindiScript -> listOf("मैं आ जाऊँगा।", "5 बजे मिलें?", "थोड़ा लेट हो सकता हूँ।")
+                    isHinglish -> listOf("main aa jaunga.", "5 baje milte hain?", "thoda late ho sakta hoon.")
+                    else -> listOf("I'll be there.", "Let's meet at 5?", "Might be a little late.")
                 }
             }
 
             text.hasAny("thanks", "thank you", "shukriya", "thx") -> {
                 when {
                     isHindiScript -> listOf("कोई बात नहीं!", "जब भी चाहिए, बताओ।", "मदद करके खुशी हुई।")
-                    isHinglish -> listOf("Koi baat nahi!", "Anytime yaar.", "Help karke achha laga.")
-                    else -> listOf("You're welcome!", "Anytime!", "Happy to help.")
+                    isHinglish -> listOf("koi baat nahi!", "anytime yaar.", "done bhai.")
+                    else -> listOf("No worries!", "Anytime!", "Got you.")
                 }
             }
 
@@ -82,17 +82,17 @@ class OnDeviceSuggestionGenerator @Inject constructor() {
 
             text.contains("?") -> {
                 when {
-                    isHindiScript -> listOf("हाँ, बिल्कुल।", "ज़रूर!", "अभी confirm करके बताता हूँ।")
-                    isHinglish -> listOf("Haan, bilkul.", "Sure!", "Confirm karke batata hoon.")
-                    else -> listOf("Yes, absolutely!", "Sure!", "Not sure yet, let me check.")
+                    isHindiScript -> listOf("हाँ, बोलो?", "हाँ, करते हैं।", "ठीक है, चलता हूँ।")
+                    isHinglish -> listOf("haan bol?", "haan, karte hain.", "theek hai, chalo.")
+                    else -> listOf("Yeah?", "Sure, let's do it.", "Okay, sounds good.")
                 }
             }
 
             else -> {
                 when {
                     isHindiScript -> listOf("ठीक है।", "समझ गया।", "कर देता हूँ।")
-                    isHinglish -> listOf("Theek hai.", "Samajh gaya.", "Kar deta hoon.")
-                    else -> listOf("Got it.", "Sounds good.", "Will do.")
+                    isHinglish -> listOf("theek hai.", "samajh gaya.", "done.")
+                    else -> listOf("Got it.", "Cool.", "Done.")
                 }
             }
         }
@@ -145,9 +145,10 @@ class OnDeviceSuggestionGenerator @Inject constructor() {
             isHinglish = isHinglish,
         )
 
+        val cap = context.replyLength.maxChars.coerceIn(40, 400)
         return styledReplies.map {
             Suggestion(
-                text = it.take(90),
+                text = it.take(cap),
                 confidence = confidence,
                 source = SuggestionSource.ON_DEVICE,
             )
@@ -167,6 +168,8 @@ private fun applyStyleMemory(
 ): List<String> {
     if (styleHint.isNullOrBlank()) return replies
     return when (styleHint) {
+        "casual_slang" -> replies
+
         "professional" -> {
             replies.map { reply ->
                 when {

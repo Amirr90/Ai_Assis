@@ -15,6 +15,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -41,6 +42,8 @@ fun MainDashboardShell(
     onOpenSuggestions: () -> Unit,
     onOpenImeSettings: () -> Unit,
     onOpenProUpgrade: () -> Unit,
+    initialInnerRoute: String? = null,
+    onInitialInnerRouteConsumed: () -> Unit = {},
 ) {
     val innerNav = rememberNavController()
     val navBackStackEntry by innerNav.currentBackStackEntryAsState()
@@ -66,6 +69,14 @@ fun MainDashboardShell(
                 saveState = true
             }
         }
+    }
+
+    LaunchedEffect(initialInnerRoute) {
+        val route = initialInnerRoute ?: return@LaunchedEffect
+        if (route == Screen.Analytics.route) {
+            navigateToAnalytics()
+        }
+        onInitialInnerRouteConsumed()
     }
 
     Scaffold(

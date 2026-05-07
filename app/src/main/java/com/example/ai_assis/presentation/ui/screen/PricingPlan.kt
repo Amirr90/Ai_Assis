@@ -5,6 +5,7 @@ enum class PricingPlan {
     Monthly,
     Yearly,
     Credits,
+    Test,
 }
 
 fun PricingPlan.isPaid(): Boolean = this != PricingPlan.Free
@@ -14,6 +15,7 @@ fun PricingPlan.planId(): String = when (this) {
     PricingPlan.Monthly -> "monthly"
     PricingPlan.Yearly -> "yearly"
     PricingPlan.Credits -> "credits"
+    PricingPlan.Test -> "test"
 }
 
 fun pricingPlanFromId(planId: String): PricingPlan? = when (planId.lowercase()) {
@@ -21,6 +23,7 @@ fun pricingPlanFromId(planId: String): PricingPlan? = when (planId.lowercase()) 
     "monthly" -> PricingPlan.Monthly
     "yearly" -> PricingPlan.Yearly
     "credits" -> PricingPlan.Credits
+    "test" -> PricingPlan.Test
     else -> null
 }
 

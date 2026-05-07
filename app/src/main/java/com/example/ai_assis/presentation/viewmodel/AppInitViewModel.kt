@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.ai_assis.data.local.UsageManager
 import com.example.ai_assis.data.remote.AuthRepository
 import com.example.ai_assis.data.remote.FirestoreUsageRepository
+import com.example.ai_assis.notifications.EngagementActivationTracker
 import com.google.firebase.FirebaseException
 import com.google.firebase.auth.FirebaseAuthException
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -21,6 +22,7 @@ class AppInitViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val firestoreRepo: FirestoreUsageRepository,
     private val usageManager: UsageManager,
+    private val engagementActivationTracker: EngagementActivationTracker,
 ) : ViewModel() {
 
     /**
@@ -35,6 +37,7 @@ class AppInitViewModel @Inject constructor(
                     ?: authRepository.signInAnonymously()
                 firestoreRepo.getOrCreateUser(uid)
                 usageManager.startObserving(uid)
+                engagementActivationTracker.markMainDashboardReady()
             } catch (e: FirebaseAuthException) {
                 Log.e(
                     TAG,

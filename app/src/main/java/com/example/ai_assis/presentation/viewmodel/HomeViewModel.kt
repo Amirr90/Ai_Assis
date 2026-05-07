@@ -2,33 +2,42 @@ package com.example.ai_assis.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai_assis.data.local.UsageManager
+import com.example.ai_assis.data.remote.model.UserUsageRecord
 import com.example.ai_assis.domain.model.CustomTemplate
+import com.example.ai_assis.domain.model.LanguagePreference
+import com.example.ai_assis.domain.model.MemoryDepth
 import com.example.ai_assis.domain.model.ReplyLength
-import com.example.ai_assis.domain.model.ReplyTone
 import com.example.ai_assis.domain.repository.FeaturePreferencesRepository
 import com.example.ai_assis.domain.repository.TemplateRepository
-import com.example.ai_assis.domain.repository.ToneRepository
 import com.example.ai_assis.service.NotificationEventBus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 data class DashboardUiState(
-    val selectedTone: ReplyTone = ReplyTone.CASUAL,
+    val adaptiveRepliesEnabled: Boolean = true,
+    val memoryDepth: MemoryDepth = MemoryDepth.BALANCED,
+    val languagePreference: LanguagePreference = LanguagePreference.AUTO,
+    val rememberContext: Boolean = true,
     val replyLength: ReplyLength = ReplyLength.MEDIUM,
     val aiEnabled: Boolean = true,
     val templates: List<CustomTemplate> = emptyList(),
     val chatHistory: List<NotificationEventBus.ChatSuggestionItem> = emptyList(),
     val overlayMeta: NotificationEventBus.OverlayMetaState = NotificationEventBus.OverlayMetaState(),
+    val userUsageRecord: UserUsageRecord = UserUsageRecord(),
 )
 
 sealed interface DashboardEvent {
-    data class ToneSelected(val tone: ReplyTone) : DashboardEvent
+    data class AdaptiveRepliesToggled(val enabled: Boolean) : DashboardEvent
+    data class MemoryDepthSelected(val depth: MemoryDepth) : DashboardEvent
+    data class LanguagePreferenceSelected(val preference: LanguagePreference) : DashboardEvent
+    data class RememberContextToggled(val enabled: Boolean) : DashboardEvent
     data class ReplyLengthSelected(val length: ReplyLength) : DashboardEvent
     data class AiToggled(val enabled: Boolean) : DashboardEvent
     data class AddTemplate(val text: String, val appPackage: String? = null) : DashboardEvent
@@ -39,20 +48,33 @@ sealed interface DashboardEvent {
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val toneRepository: ToneRepository,
     private val featurePreferencesRepository: FeaturePreferencesRepository,
     private val templateRepository: TemplateRepository,
+    usageManager: UsageManager,
 ) : ViewModel() {
-    val selectedTone: StateFlow<ReplyTone> = toneRepository.toneFlow.stateIn(
+
+    val adaptiveRepliesEnabled = featurePreferencesRepository.adaptiveRepliesFlow.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = ReplyTone.CASUAL,
+        initialValue = true,
     )
 
-    val toneOptions: StateFlow<List<ReplyTone>> = selectedTone.map { ReplyTone.entries }.stateIn(
+    val memoryDepth = featurePreferencesRepository.memoryDepthFlow.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = ReplyTone.entries,
+        initialValue = MemoryDepth.BALANCED,
+    )
+
+    val languagePreference = featurePreferencesRepository.languagePreferenceFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = LanguagePreference.AUTO,
+    )
+
+    val rememberContext = featurePreferencesRepository.rememberContextFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = true,
     )
 
     val replyLength = featurePreferencesRepository.replyLengthFlow.stateIn(
@@ -85,36 +107,50 @@ class HomeViewModel @Inject constructor(
         initialValue = NotificationEventBus.OverlayMetaState(),
     )
 
-    private data class DashboardPartialState(
-        val selectedTone: ReplyTone,
+    private val userUsageRecord = usageManager.userRecord
+
+    private data class AdaptiveSettingsSnapshot(
+        val adaptiveRepliesEnabled: Boolean,
+        val memoryDepth: MemoryDepth,
+        val languagePreference: LanguagePreference,
+        val rememberContext: Boolean,
         val replyLength: ReplyLength,
         val aiEnabled: Boolean,
-        val templates: List<CustomTemplate>,
-        val chatHistory: List<NotificationEventBus.ChatSuggestionItem>,
     )
 
+    private val adaptiveSettingsSnapshot: Flow<AdaptiveSettingsSnapshot> = combine(
+        combine(adaptiveRepliesEnabled, memoryDepth) { adaptive, depth -> Pair(adaptive, depth) },
+        combine(languagePreference, rememberContext) { lang, remember -> Pair(lang, remember) },
+        combine(replyLength, aiEnabled) { length, ai -> Pair(length, ai) },
+    ) { adaptiveAndDepth, langAndRemember, lengthAndAi ->
+        AdaptiveSettingsSnapshot(
+            adaptiveRepliesEnabled = adaptiveAndDepth.first,
+            memoryDepth = adaptiveAndDepth.second,
+            languagePreference = langAndRemember.first,
+            rememberContext = langAndRemember.second,
+            replyLength = lengthAndAi.first,
+            aiEnabled = lengthAndAi.second,
+        )
+    }
+
     val uiState: StateFlow<DashboardUiState> = combine(
-        selectedTone,
-        replyLength,
-        aiEnabled,
+        adaptiveSettingsSnapshot,
         templates,
         chatHistory,
-    ) { tone, length, aiOn, templateList, history ->
-        DashboardPartialState(
-            selectedTone = tone,
-            replyLength = length,
-            aiEnabled = aiOn,
+        overlayMeta,
+        userUsageRecord,
+    ) { snap, templateList, history, meta, record ->
+        DashboardUiState(
+            adaptiveRepliesEnabled = snap.adaptiveRepliesEnabled,
+            memoryDepth = snap.memoryDepth,
+            languagePreference = snap.languagePreference,
+            rememberContext = snap.rememberContext,
+            replyLength = snap.replyLength,
+            aiEnabled = snap.aiEnabled,
             templates = templateList,
             chatHistory = history,
-        )
-    }.combine(overlayMeta) { partial, meta ->
-        DashboardUiState(
-            selectedTone = partial.selectedTone,
-            replyLength = partial.replyLength,
-            aiEnabled = partial.aiEnabled,
-            templates = partial.templates,
-            chatHistory = partial.chatHistory,
             overlayMeta = meta,
+            userUsageRecord = record,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -124,7 +160,10 @@ class HomeViewModel @Inject constructor(
 
     fun onEvent(event: DashboardEvent) {
         when (event) {
-            is DashboardEvent.ToneSelected -> saveTone(event.tone)
+            is DashboardEvent.AdaptiveRepliesToggled -> setAdaptiveReplies(event.enabled)
+            is DashboardEvent.MemoryDepthSelected -> setMemoryDepth(event.depth)
+            is DashboardEvent.LanguagePreferenceSelected -> setLanguagePreference(event.preference)
+            is DashboardEvent.RememberContextToggled -> setRememberContext(event.enabled)
             is DashboardEvent.ReplyLengthSelected -> saveReplyLength(event.length)
             is DashboardEvent.AiToggled -> toggleAi(event.enabled)
             is DashboardEvent.AddTemplate -> addTemplate(event.text, event.appPackage)
@@ -134,43 +173,43 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun saveTone(tone: ReplyTone) {
-        viewModelScope.launch {
-            toneRepository.saveTone(tone)
-        }
-    }
-
     fun clearHistory() {
         NotificationEventBus.clearHistory()
     }
 
+    private fun setAdaptiveReplies(enabled: Boolean) {
+        viewModelScope.launch { featurePreferencesRepository.setAdaptiveRepliesEnabled(enabled) }
+    }
+
+    private fun setMemoryDepth(depth: MemoryDepth) {
+        viewModelScope.launch { featurePreferencesRepository.setMemoryDepth(depth) }
+    }
+
+    private fun setLanguagePreference(preference: LanguagePreference) {
+        viewModelScope.launch { featurePreferencesRepository.setLanguagePreference(preference) }
+    }
+
+    private fun setRememberContext(enabled: Boolean) {
+        viewModelScope.launch { featurePreferencesRepository.setRememberContext(enabled) }
+    }
+
     private fun saveReplyLength(length: ReplyLength) {
-        viewModelScope.launch {
-            featurePreferencesRepository.setReplyLength(length)
-        }
+        viewModelScope.launch { featurePreferencesRepository.setReplyLength(length) }
     }
 
     private fun toggleAi(enabled: Boolean) {
-        viewModelScope.launch {
-            featurePreferencesRepository.setAiEnabled(enabled)
-        }
+        viewModelScope.launch { featurePreferencesRepository.setAiEnabled(enabled) }
     }
 
     private fun addTemplate(text: String, appPackage: String?) {
-        viewModelScope.launch {
-            templateRepository.saveTemplate(text = text, appPackage = appPackage)
-        }
+        viewModelScope.launch { templateRepository.saveTemplate(text = text, appPackage = appPackage) }
     }
 
     private fun removeTemplate(templateId: String) {
-        viewModelScope.launch {
-            templateRepository.deleteTemplate(templateId)
-        }
+        viewModelScope.launch { templateRepository.deleteTemplate(templateId) }
     }
 
     private fun markTemplateUsed(templateId: String) {
-        viewModelScope.launch {
-            templateRepository.markTemplateUsed(templateId)
-        }
+        viewModelScope.launch { templateRepository.markTemplateUsed(templateId) }
     }
 }

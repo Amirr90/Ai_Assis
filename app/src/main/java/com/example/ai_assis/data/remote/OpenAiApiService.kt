@@ -1,11 +1,13 @@
 package com.example.ai_assis.data.remote
 
 import com.example.ai_assis.BuildConfig
+import com.example.ai_assis.data.prompt.PromptPolicyBuilder
 import com.example.ai_assis.data.remote.dto.MessageDto
 import com.example.ai_assis.data.remote.dto.ReplyRequestDto
 import com.example.ai_assis.data.remote.dto.ReplyResponseDto
 import com.example.ai_assis.data.remote.model.OpenAiReplyResult
 import com.example.ai_assis.data.remote.model.OpenAiTokenUsage
+import com.example.ai_assis.domain.model.ConversationContext
 import com.example.ai_assis.domain.model.ReplyTone
 import android.util.Log
 import io.ktor.client.HttpClient
@@ -29,6 +31,29 @@ class OpenAiApiService @Inject constructor(
         isLenient = true
     }
 
+    suspend fun getRepliesAdaptive(
+        context: ConversationContext,
+        compiledConversationContext: String,
+    ): OpenAiReplyResult {
+        val maxChars = PromptPolicyBuilder.effectiveMaxChars(context)
+        val languageHint = context.languageHint
+        Log.d(
+            logTag,
+            "OpenAI adaptive request. hasApiKey=${BuildConfig.OPENAI_KEY.isNotBlank()} sender=${context.sender}",
+        )
+        val userContent = PromptPolicyBuilder.openAiUserPromptBody(
+            context = context,
+            compiledConversationContext = compiledConversationContext,
+        )
+        return postChatCompletion(
+            userContent = userContent,
+            message = context.latestMessage,
+            languageHint = languageHint,
+            maxChars = maxChars,
+        )
+    }
+
+    /** Legacy path (settings-free); kept for older use cases. */
     suspend fun getReplies(
         message: String,
         tone: ReplyTone,
@@ -38,43 +63,41 @@ class OpenAiApiService @Inject constructor(
         languageHint: String? = null,
         styleHint: String? = null,
     ): OpenAiReplyResult {
-        val hasApiKey = BuildConfig.OPENAI_KEY.isNotBlank()
-        Log.d(logTag, "OpenAI request start. hasApiKey=$hasApiKey tone=${tone.name} sender=${sender ?: "unknown"}")
-
-        val contextKeywords = extractKeywords(
-            text = buildString {
-                append(message)
-                if (!compiledConversationContext.isNullOrBlank()) {
-                    append(' ')
-                    append(compiledConversationContext)
-                }
-            },
-        )
-
+        val maxChars = 120
         val prompt = buildString {
-            appendLine("Generate 3 short replies to this message.")
-            appendLine("Tone: ${tone.promptTone}")
-            if (!sender.isNullOrBlank()) appendLine("Sender: $sender")
-            appendLine("Message: $message")
-            if (!compiledConversationContext.isNullOrBlank()) {
-                appendLine("Compiled conversation context (role-tagged):")
-                appendLine(compiledConversationContext)
-            }
-            if (recentMessages.isNotEmpty()) {
-                appendLine("Recent chat context (latest last):")
-                recentMessages.takeLast(8).forEach { msg -> appendLine("- $msg") }
-            }
+            appendLine("You are generating realistic WhatsApp replies.")
+            appendLine()
+            appendLine("Rules:")
+            appendLine("* Sound human; match thread")
+            appendLine("* Avoid assistant tone; short natural lines")
+            appendLine("* Generate 3 different replies")
+            appendLine()
+            if (!sender.isNullOrBlank()) appendLine("Chat with: $sender")
+            appendLine("Latest message: $message")
+            appendLine("Tone hint: ${tone.promptTone}")
             if (!languageHint.isNullOrBlank()) appendLine("Language hint: $languageHint")
-            if (!styleHint.isNullOrBlank()) appendLine("Preferred style for this sender: $styleHint")
-            appendLine("IMPORTANT: Detect the language/script of the message (English, Hindi, Hinglish, or any other language) and reply in the EXACT SAME language and script.")
-            appendLine("If the message mixes Hindi and English (Hinglish), your replies must also be Hinglish.")
-            appendLine("Use BOTH latest Message and conversation context to infer current intent and continuity.")
-            appendLine("Avoid generic replies (e.g., only 'ok', 'sure', 'got it') unless context clearly demands it.")
-            appendLine("Replies should sound human, specific, and relatable to this exact conversation.")
-            appendLine("Return EXACTLY 3 replies.")
-            appendLine("No markdown. No numbering. No prefixes.")
-            append("Each reply must be <= 90 characters, concise, natural, and conversational. Return JSON only: {\"replies\":[\"...\",\"...\",\"...\"]}")
+            if (!styleHint.isNullOrBlank()) appendLine("Style hint: $styleHint")
+            appendLine()
+            appendLine("Conversation history:")
+            appendLine(compiledConversationContext?.ifBlank { "Friend: $message" } ?: "Friend: $message")
+            appendLine()
+            appendLine("Return JSON only: {\"replies\":[\"...\",\"...\",\"...\"]} max $maxChars chars each.")
         }
+        return postChatCompletion(
+            userContent = prompt,
+            message = message,
+            languageHint = languageHint,
+            maxChars = maxChars,
+        )
+    }
+
+    private suspend fun postChatCompletion(
+        userContent: String,
+        message: String,
+        languageHint: String?,
+        maxChars: Int,
+    ): OpenAiReplyResult {
+        val contextKeywords = extractKeywords(text = userContent)
 
         val response = try {
             httpClient.post(urlString = "https://api.openai.com/v1/chat/completions") {
@@ -86,9 +109,9 @@ class OpenAiApiService @Inject constructor(
                         messages = listOf(
                             MessageDto(
                                 role = "system",
-                                content = "You are a multilingual smart-reply assistant. Use latest message + context, keep continuity, and reply in the same language/script (including Hinglish). Prefer specific, relatable replies over generic acknowledgements. Return JSON: {\"replies\":[\"...\",\"...\",\"...\"]}.",
+                                content = "Generate realistic chat replies using conversation context. Match language/script. Return JSON {\"replies\":[\"...\",\"...\",\"...\"]}.",
                             ),
-                            MessageDto(role = "user", content = prompt),
+                            MessageDto(role = "user", content = userContent),
                         ),
                     ),
                 )
@@ -119,7 +142,6 @@ class OpenAiApiService @Inject constructor(
             logTag,
             "OpenAI success response. status=${response.status.value} bodySnippet=${responseBody.toLogSnippet()}",
         )
-        Log.d(logTag, "OpenAI raw response body=$responseBody")
         val parsedResponse = runCatching { json.decodeFromString(ReplyResponseDto.serializer(), responseBody) }
             .getOrElse { parseError ->
                 Log.e(logTag, "OpenAI response parse failed. ${parseError.message}")
@@ -137,22 +159,9 @@ class OpenAiApiService @Inject constructor(
                 totalTokens = u.totalTokens,
             )
         }
-        if (usageSnapshot != null) {
-            Log.d(
-                logTag,
-                "OpenAI usage tokens prompt=${usageSnapshot.promptTokens} completion=${usageSnapshot.completionTokens} total=${usageSnapshot.totalTokens}",
-            )
-        }
 
         val firstChoice = parsedResponse.choices.firstOrNull()
         val content = firstChoice?.message?.content.orEmpty()
-        Log.d(
-            logTag,
-            "OpenAI response received. choices=${parsedResponse.choices.size} rawContentLength=${content.length} finishReason=${firstChoice?.finishReason ?: "unknown"}",
-        )
-        if (content.isBlank()) {
-            Log.w(logTag, "OpenAI content is blank. bodySnippet=${responseBody.toLogSnippet()}")
-        }
         val rawCandidates = parseJsonReplies(content).ifEmpty {
             content
                 .lineSequence()
@@ -161,14 +170,13 @@ class OpenAiApiService @Inject constructor(
                 .map { line -> line.removePrefix("-").trim().replace(Regex("^\\d+[.)]\\s*"), "") }
                 .toList()
         }
-        Log.d(logTag, "OpenAI raw parsed candidates=$rawCandidates")
 
         val ranked = rawCandidates
             .asSequence()
             .map { candidate: String -> candidate.trim() }
             .filter { candidate: String -> candidate.isNotBlank() }
             .distinct()
-            .map { candidate: String -> candidate.take(90) }
+            .map { candidate: String -> candidate.take(maxChars) }
             .sortedByDescending { candidate ->
                 scoreCandidate(
                     candidate = candidate,
@@ -179,7 +187,6 @@ class OpenAiApiService @Inject constructor(
             .take(3)
             .toList()
 
-        Log.d(logTag, "OpenAI final ranked replies count=${ranked.size} replies=$ranked")
         val finalReplies = ranked.ifEmpty { fallbackReplies(message = message, languageHint = languageHint) }
         return OpenAiReplyResult(
             replies = finalReplies,
@@ -231,21 +238,30 @@ private fun extractKeywords(text: String): Set<String> {
 private fun fallbackReplies(message: String, languageHint: String?): List<String> {
     val lower = message.lowercase()
     val isHindi = languageHint == "hi" || message.any { it.code in 0x0900..0x097F }
+    val isHinglish = !isHindi && listOf("kya", "kaise", "kidhar", "kaha", "yaar", "bhai", "chal", "milte").any {
+        lower.contains(it)
+    }
     return if (isHindi) {
         when {
-            lower.contains("?") -> listOf("हाँ, मैं चेक करके बताता हूँ।", "जी, इसका अपडेट अभी देता हूँ।", "ठीक है, मैं कन्फर्म करके बताता हूँ।")
-            lower.contains("कहाँ") || lower.contains("लोकेशन") -> listOf("मैं लोकेशन भेज रहा हूँ।", "मैं पास ही हूँ, 10 मिनट में आता हूँ।", "बस पहुँचने वाला हूँ।")
-            lower.contains("मीटिंग") || lower.contains("रिपोर्ट") || lower.contains("डेडलाइन") -> listOf("ठीक है, इसे प्राथमिकता देता हूँ।", "मीटिंग से पहले अपडेट शेयर कर दूँगा।", "रिपोर्ट का स्टेटस अभी भेजता हूँ।")
-            lower.contains("धन्यवाद") || lower.contains("शुक्रिया") -> listOf("कोई बात नहीं!", "हमेशा मदद के लिए तैयार हूँ।", "खुशी हुई मदद करके।")
-            else -> listOf("ठीक है, मैं इसे देख रहा हूँ।", "समझ गया, अभी जवाब देता हूँ।", "हाँ, इस पर अपडेट देता हूँ।")
+            lower.contains("?") -> listOf("हाँ, बताओ?", "हाँ बोल, क्या scene?", "हां, करते हैं।")
+            lower.contains("कहाँ") || lower.contains("लोकेशन") -> listOf("लोकेशन भेज रहा हूँ।", "मैं पास ही हूँ, आ जा।", "बस 10 मिन में पहुंचता हूँ।")
+            lower.contains("धन्यवाद") || lower.contains("शुक्रिया") -> listOf("अरे कोई बात नहीं!", "चल ठीक है yaar.", "Anytime!")
+            else -> listOf("ठीक है, चल करते हैं।", "समझ गया, scene set.", "हां, मैं हूँ।")
+        }
+    } else if (isHinglish) {
+        when {
+            lower.contains("?") -> listOf("haan bol?", "haan yaar, karte hain.", "scene kya hai?")
+            lower.contains("where") || lower.contains("location") || lower.contains("kidhar") || lower.contains("kaha") ->
+                listOf("location bhejta hoon.", "main paas hi hoon.", "aa raha hoon, 10 min.")
+            lower.contains("thanks") || lower.contains("thx") -> listOf("arey chill.", "koi na yaar.", "anytime bro.")
+            else -> listOf("haan done.", "theek hai, chalte hain.", "mast, milte hain.")
         }
     } else {
         when {
-            lower.contains("?") -> listOf("Yes, let me confirm and get back.", "I will check this and update you shortly.", "Noted, sharing a confirmed update soon.")
-            lower.contains("where") || lower.contains("location") || lower.contains("kidhar") || lower.contains("kaha") -> listOf("I am nearby, sharing location now.", "On the way, I will reach soon.", "I am heading there, will update in a bit.")
-            lower.contains("meeting") || lower.contains("report") || lower.contains("deadline") -> listOf("Noted, I will prioritize this and update.", "I will share the latest status before the deadline.", "Understood, I will align this before the meeting.")
-            lower.contains("thanks") || lower.contains("thank you") || lower.contains("thx") -> listOf("You are welcome, happy to help.", "Anytime, glad this helped.", "No problem, feel free to ping anytime.")
-            else -> listOf("Got it, I will check and update you.", "Understood, I will get back shortly.", "Noted, let me confirm and reply.")
+            lower.contains("?") -> listOf("yeah, tell me?", "yup, sounds good.", "cool, let's do it.")
+            lower.contains("where") || lower.contains("location") -> listOf("sharing location.", "nearby only.", "on my way.")
+            lower.contains("thanks") || lower.contains("thank you") || lower.contains("thx") -> listOf("anytime.", "no worries.", "got you.")
+            else -> listOf("done.", "sounds good.", "cool, works.")
         }
     }
 }

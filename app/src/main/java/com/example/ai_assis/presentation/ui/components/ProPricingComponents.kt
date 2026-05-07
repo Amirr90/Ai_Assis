@@ -32,8 +32,10 @@ import com.example.ai_assis.R
 @Composable
 fun DailyLimitPricingCallout(
     onUpgrade: () -> Unit,
+    canUpgrade: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    if (!canUpgrade) return
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = stringResource(R.string.pro_pricing_short),
@@ -53,8 +55,10 @@ fun DailyLimitPricingCallout(
 @Composable
 fun OverlayProPricingTeaser(
     onOpenProUpgrade: () -> Unit,
+    canUpgrade: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    if (!canUpgrade) return
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -130,6 +134,51 @@ fun HomeProUpgradePromoCard(
             }
             TextButton(onClick = onOpenProUpgrade) {
                 Text(stringResource(R.string.pro_upgrade_cta))
+            }
+        }
+    }
+}
+
+@Composable
+fun HomeActivePlanCard(
+    planTitle: String,
+    subtitle: String,
+    onManagePlan: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.pro_active_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = planTitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.9f),
+                )
+            }
+            TextButton(onClick = onManagePlan) {
+                Text(stringResource(R.string.pro_manage_cta))
             }
         }
     }

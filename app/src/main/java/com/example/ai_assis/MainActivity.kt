@@ -37,6 +37,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import com.example.ai_assis.data.local.setIntroFlowCompleted
 import com.example.ai_assis.data.local.isIntroFlowCompleted
 import com.example.ai_assis.presentation.navigation.Screen
@@ -50,8 +52,13 @@ import com.example.ai_assis.presentation.ui.flow.OverlayPermissionScreen
 import com.example.ai_assis.presentation.ui.flow.SplashScreen
 import com.example.ai_assis.presentation.ui.screen.AppFilterScreen
 import com.example.ai_assis.presentation.ui.screen.MainDashboardShell
+import com.example.ai_assis.presentation.ui.screen.PaymentSuccessScreen
 import com.example.ai_assis.presentation.viewmodel.AppFilterViewModel
 import com.example.ai_assis.presentation.viewmodel.AppInitViewModel
+import com.example.ai_assis.domain.repository.NotificationAnalyticsRepository
+import com.example.ai_assis.notifications.NavTarget
+import com.example.ai_assis.notifications.applyNotificationIntentForPendingNav
+import com.example.ai_assis.notifications.clearNotificationNavExtras
 import com.example.ai_assis.service.MainAppForegroundTracker
 import com.example.ai_assis.service.NotificationEventBus
 import com.example.ai_assis.service.OverlayService
@@ -69,6 +76,9 @@ class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
 
     @Inject
     lateinit var razorpayPaymentRelay: RazorpayPaymentRelay
+
+    @Inject
+    lateinit var notificationAnalyticsRepository: NotificationAnalyticsRepository
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -89,7 +99,7 @@ class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
         )
         setContent {
             AI_AssisTheme {
-                AppNav()
+                AppNav(notificationAnalyticsRepository = notificationAnalyticsRepository)
             }
         }
     }
@@ -124,12 +134,15 @@ class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
 }
 
 @Composable
-private fun AppNav() {
+private fun AppNav(
+    notificationAnalyticsRepository: NotificationAnalyticsRepository,
+) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val appInitViewModel: AppInitViewModel = hiltViewModel()
+    var pendingDashboardInnerRoute by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -143,15 +156,51 @@ private fun AppNav() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val activity = context as ComponentActivity
+    val activity = context as MainActivity
     DisposableEffect(lifecycleOwner, navController) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                if (activity.intent.getBooleanExtra(MainActivity.EXTRA_OPEN_PRO_UPGRADE, false)) {
-                    navController.navigate(Screen.ProUpgrade.route) {
-                        launchSingleTop = true
+                val pending = activity.applyNotificationIntentForPendingNav()
+                val hasNav =
+                    pending.target != NavTarget.DEFAULT ||
+                        pending.innerRoute != null ||
+                        pending.trackClick
+                if (hasNav) {
+                    if (pending.trackClick && pending.analyticsKey != null) {
+                        scope.launch {
+                            notificationAnalyticsRepository.recordClick(
+                                pending.analyticsKey,
+                                System.currentTimeMillis(),
+                            )
+                        }
                     }
-                    activity.intent.removeExtra(MainActivity.EXTRA_OPEN_PRO_UPGRADE)
+                    when (pending.target) {
+                        NavTarget.PRO_UPGRADE ->
+                            navController.navigate(Screen.ProUpgrade.route) {
+                                launchSingleTop = true
+                            }
+                        NavTarget.APP_FILTER ->
+                            navController.navigate(Screen.AppFilter.route) {
+                                launchSingleTop = true
+                            }
+                        NavTarget.SUGGESTIONS ->
+                            navController.navigate(Screen.Suggestions.route) {
+                                launchSingleTop = true
+                            }
+                        NavTarget.ANALYTICS -> {
+                            navController.navigate(Screen.MainDashboard.route) {
+                                launchSingleTop = true
+                            }
+                            pendingDashboardInnerRoute = Screen.Analytics.route
+                        }
+                        NavTarget.MAIN, NavTarget.DEFAULT -> {
+                            navController.navigate(Screen.MainDashboard.route) {
+                                launchSingleTop = true
+                            }
+                            pending.innerRoute?.let { pendingDashboardInnerRoute = it }
+                        }
+                    }
+                    activity.clearNotificationNavExtras()
                 }
             }
         }
@@ -288,13 +337,56 @@ private fun AppNav() {
                             launchSingleTop = true
                         }
                     },
+                    initialInnerRoute = pendingDashboardInnerRoute,
+                    onInitialInnerRouteConsumed = { pendingDashboardInnerRoute = null },
                 )
             }
 
             composable(route = Screen.ProUpgrade.route) {
                 ProUpgradeScreen(
-                    onUpgrade = { navController.popBackStack() },
+                    onUpgrade = { planId, amountPaise, currency, creditsToAdd, orderId, paymentId ->
+                        navController.navigate(
+                            Screen.PaymentSuccess.createRoute(
+                                planId = planId,
+                                amountPaise = amountPaise,
+                                currency = currency,
+                                creditsToAdd = creditsToAdd,
+                                orderId = orderId,
+                                paymentId = paymentId,
+                            ),
+                        ) {
+                            popUpTo(Screen.ProUpgrade.route) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    },
                     onDismiss = { navController.popBackStack() },
+                )
+            }
+
+            composable(
+                route = Screen.PaymentSuccess.route,
+                arguments = listOf(
+                    navArgument(Screen.PaymentSuccess.PLAN_ID) { type = NavType.StringType },
+                    navArgument(Screen.PaymentSuccess.AMOUNT_PAISE) { type = NavType.LongType },
+                    navArgument(Screen.PaymentSuccess.CURRENCY) { type = NavType.StringType },
+                    navArgument(Screen.PaymentSuccess.CREDITS_TO_ADD) { type = NavType.IntType },
+                    navArgument(Screen.PaymentSuccess.ORDER_ID) { type = NavType.StringType },
+                    navArgument(Screen.PaymentSuccess.PAYMENT_ID) { type = NavType.StringType },
+                ),
+            ) { backStackEntry ->
+                PaymentSuccessScreen(
+                    planId = backStackEntry.arguments?.getString(Screen.PaymentSuccess.PLAN_ID).orEmpty(),
+                    amountPaise = backStackEntry.arguments?.getLong(Screen.PaymentSuccess.AMOUNT_PAISE) ?: 0L,
+                    currency = backStackEntry.arguments?.getString(Screen.PaymentSuccess.CURRENCY).orEmpty(),
+                    creditsToAdd = backStackEntry.arguments?.getInt(Screen.PaymentSuccess.CREDITS_TO_ADD) ?: 0,
+                    orderId = backStackEntry.arguments?.getString(Screen.PaymentSuccess.ORDER_ID).orEmpty(),
+                    paymentId = backStackEntry.arguments?.getString(Screen.PaymentSuccess.PAYMENT_ID).orEmpty(),
+                    onContinue = {
+                        navController.navigate(Screen.MainDashboard.route) {
+                            popUpTo(Screen.MainDashboard.route) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    },
                 )
             }
 

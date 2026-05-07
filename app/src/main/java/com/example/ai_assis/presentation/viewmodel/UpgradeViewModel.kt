@@ -3,12 +3,14 @@ package com.example.ai_assis.presentation.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai_assis.BuildConfig
 import com.example.ai_assis.data.local.UsageManager
 import com.example.ai_assis.data.remote.AuthRepository
 import com.example.ai_assis.data.remote.FirestoreUsageRepository
 import com.example.ai_assis.data.remote.model.PlanRecord
 import com.example.ai_assis.payment.RazorpayPaymentRelay
 import com.example.ai_assis.payment.RazorpayPaymentResult
+import com.example.ai_assis.payment.TransactionStatus
 import com.example.ai_assis.payment.SubscriptionPaymentRepository
 import com.example.ai_assis.payment.VerifyOutcome
 import com.example.ai_assis.presentation.ui.screen.PlanUiModel
@@ -37,9 +39,18 @@ sealed interface UpgradeState {
     data object Idle : UpgradeState
     data object CreatingOrder : UpgradeState
     data object ConfirmingReceipt : UpgradeState
-    data object Success : UpgradeState
+    data class Success(val purchase: PurchaseSuccessPayload) : UpgradeState
     data class Error(val message: String) : UpgradeState
 }
+
+data class PurchaseSuccessPayload(
+    val planId: String,
+    val amountPaise: Long,
+    val currency: String,
+    val creditsToAdd: Int,
+    val orderId: String,
+    val paymentId: String,
+)
 
 @HiltViewModel
 class UpgradeViewModel @Inject constructor(
@@ -62,7 +73,10 @@ class UpgradeViewModel @Inject constructor(
 
     val plans: StateFlow<List<PlanUiModel>> = firestoreUsageRepository.observePlans()
         .map { remote ->
-            remote.mapNotNull { it.toPlanUiModelOrNull() }.ifEmpty { fallbackPlans() }
+            remote
+                .mapNotNull { it.toPlanUiModelOrNull() }
+                .filter { BuildConfig.DEBUG || it.pricingPlan != PricingPlan.Test }
+                .ifEmpty { fallbackPlans() }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), fallbackPlans())
 
@@ -118,6 +132,12 @@ class UpgradeViewModel @Inject constructor(
                     )
                     awaiting = session
                     _state.value = UpgradeState.Idle
+                    subscriptionPaymentRepository.updatePaymentStatus(
+                        orderId = session.orderId,
+                        status = TransactionStatus.Pending,
+                        reasonCode = "checkout_opened",
+                        reasonMessage = "Razorpay checkout opened on Android client.",
+                    )
                     _checkoutSessions.emit(session)
                 },
                 onFailure = { e ->
@@ -145,6 +165,12 @@ class UpgradeViewModel @Inject constructor(
 
                 awaiting = null
                 _state.value = UpgradeState.ConfirmingReceipt
+                subscriptionPaymentRepository.updatePaymentStatus(
+                    orderId = result.orderId,
+                    status = TransactionStatus.Paid,
+                    reasonCode = "payment_success_callback",
+                    reasonMessage = "Razorpay success callback received on client.",
+                )
                 Log.d(
                     TAG,
                     "Verifying payment: orderId=${result.orderId}, paymentId=${result.paymentId}",
@@ -156,13 +182,34 @@ class UpgradeViewModel @Inject constructor(
                 ).fold(
                     onSuccess = { outcome ->
                         Log.i(TAG, "verifyAndFulfill success: outcome=$outcome")
+                        subscriptionPaymentRepository.updatePaymentStatus(
+                            orderId = result.orderId,
+                            status = TransactionStatus.Verified,
+                            reasonCode = "verify_success",
+                            reasonMessage = "Payment verified and fulfilled by callable.",
+                        )
                         _state.value = when (outcome) {
-                            VerifyOutcome.Granted, VerifyOutcome.AlreadyVerified -> UpgradeState.Success
+                            VerifyOutcome.Granted, VerifyOutcome.AlreadyVerified -> UpgradeState.Success(
+                                purchase = PurchaseSuccessPayload(
+                                    planId = pending.plan.planId(),
+                                    amountPaise = pending.amountPaise,
+                                    currency = pending.currency,
+                                    creditsToAdd = pending.creditsToAdd,
+                                    orderId = pending.orderId,
+                                    paymentId = result.paymentId,
+                                ),
+                            )
                         }
                     },
                     onFailure = { e ->
                         Log.e(TAG, "verifyAndFulfill failed: ${e.message}", e)
                         awaiting = null
+                        subscriptionPaymentRepository.updatePaymentStatus(
+                            orderId = result.orderId,
+                            status = TransactionStatus.Error,
+                            reasonCode = "verify_failed",
+                            reasonMessage = e.message ?: "verifyAndFulfill failed",
+                        )
                         _state.value =
                             UpgradeState.Error(
                                 e.message
@@ -177,45 +224,71 @@ class UpgradeViewModel @Inject constructor(
                 awaiting = null
                 if (lowered.contains("cancel")) {
                     Log.d(TAG, "User canceled Razorpay checkout.")
+                    subscriptionPaymentRepository.updatePaymentStatus(
+                        orderId = pending.orderId,
+                        status = TransactionStatus.Cancelled,
+                        reasonCode = "user_cancelled",
+                        reasonMessage = result.message,
+                    )
                     _state.value = UpgradeState.Idle
                 } else {
+                    subscriptionPaymentRepository.updatePaymentStatus(
+                        orderId = pending.orderId,
+                        status = TransactionStatus.Failed,
+                        reasonCode = "gateway_failure",
+                        reasonMessage = result.message,
+                    )
                     _state.value = UpgradeState.Error(result.message)
                 }
             }
         }
     }
 
-    private fun fallbackPlans(): List<PlanUiModel> = listOf(
-        PlanRecord(
+    private fun fallbackPlans(): List<PlanUiModel> {
+        val records = mutableListOf(
+            PlanRecord(
             planId = PricingPlan.Free.planId(),
             name = "Free",
             features = listOf("30 replies/day", "Basic suggestions"),
             price = 0L,
             sortOrder = 0,
-        ).toPlanUiModelOrNull(),
-        PlanRecord(
+            ),
+            PlanRecord(
             planId = PricingPlan.Monthly.planId(),
             name = "Pro Monthly",
             features = listOf("Unlimited replies", "Faster response", "All tones"),
             price = 9_900L,
             sortOrder = 1,
-        ).toPlanUiModelOrNull(),
-        PlanRecord(
+            ),
+            PlanRecord(
             planId = PricingPlan.Yearly.planId(),
             name = "Pro Yearly",
             features = listOf("Unlimited replies", "Faster response", "All tones"),
             price = 69_900L,
             sortOrder = 2,
-        ).toPlanUiModelOrNull(),
-        PlanRecord(
+            ),
+            PlanRecord(
             planId = PricingPlan.Credits.planId(),
             name = "Pay as you go",
             features = emptyList(),
             price = 4_900L,
             creditsToAdd = 500,
             sortOrder = 3,
-        ).toPlanUiModelOrNull(),
-    ).mapNotNull { it }
+            ),
+        )
+        if (BuildConfig.DEBUG) {
+            records +=
+                PlanRecord(
+                    planId = PricingPlan.Test.planId(),
+                    name = "Test Plan",
+                    features = listOf("Live Razorpay checkout", "Debug only", "1 credit add"),
+                    price = 100L,
+                    creditsToAdd = 1,
+                    sortOrder = 99,
+                )
+        }
+        return records.mapNotNull { it.toPlanUiModelOrNull() }
+    }
 
     private companion object {
         private const val TAG = "UpgradeFlow"

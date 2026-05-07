@@ -2,6 +2,7 @@ package com.example.ai_assis.domain.usecase
 
 import com.example.ai_assis.data.local.MediaReplyProvider
 import com.example.ai_assis.data.local.UsageManager
+import com.example.ai_assis.notifications.EngagementNotificationCoordinator
 import com.example.ai_assis.domain.DailyAiLimitReachedException
 import com.example.ai_assis.domain.model.ChatMessage
 import com.example.ai_assis.domain.model.ConversationContext
@@ -22,6 +23,7 @@ class GetHybridSuggestionsUseCase @Inject constructor(
     private val mediaReplyProvider: MediaReplyProvider,
     private val getLocalFallbackSuggestionsUseCase: GetLocalFallbackSuggestionsUseCase,
     private val usageManager: UsageManager,
+    private val engagementNotificationCoordinator: EngagementNotificationCoordinator,
 ) {
     private val cacheMutex = Mutex()
     private val cloudCache = mutableMapOf<String, CacheEntry>()
@@ -115,11 +117,13 @@ class GetHybridSuggestionsUseCase @Inject constructor(
             )
         }
 
-        return cloudResult.fold(
-            onSuccess = { cloudSuggestions ->
+        return when {
+            cloudResult.isSuccess -> {
+                val cloudSuggestions = cloudResult.getOrNull().orEmpty()
                 cloudConsecutiveFailures = 0
                 if (cloudSuggestions.isNotEmpty()) {
                     putCache(cacheKey, cloudSuggestions)
+                    engagementNotificationCoordinator.onSuccessfulCloudSuggestion()
                     Result.success(
                         HybridSuggestionResult(
                             suggestions = cloudSuggestions,
@@ -137,11 +141,12 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                         ),
                     )
                 }
-            },
-            onFailure = { throwable ->
+            }
+            else -> {
                 usageManager.decrementUsage()
                 registerCloudFailure()
-                val reasonMessage = throwable.message.orEmpty()
+                val throwable = cloudResult.exceptionOrNull()
+                val reasonMessage = throwable?.message.orEmpty()
                 Result.success(
                     HybridSuggestionResult(
                         suggestions = onDeviceSuggestions,
@@ -155,8 +160,8 @@ class GetHybridSuggestionsUseCase @Inject constructor(
                         },
                     ),
                 )
-            },
-        )
+            }
+        }
     }
 
     private fun evaluateFallbackReason(
@@ -165,7 +170,8 @@ class GetHybridSuggestionsUseCase @Inject constructor(
     ): String? {
         if (context.highQualityMode) return "high_quality_mode"
         if (onDeviceSuggestions.size < minOnDeviceSuggestionCount) return "insufficient_count"
-        if (onDeviceSuggestions.any { it.text.length > maxSuggestionChars }) return "length_over_limit"
+        val maxLen = context.replyLength.maxChars.coerceIn(40, 400)
+        if (onDeviceSuggestions.any { it.text.length > maxLen }) return "length_over_limit"
         if (onDeviceSuggestions.any { it.safetyFlags.isNotEmpty() }) return "blocked_content"
 
         val avgConfidence = onDeviceSuggestions.map { it.confidence }.average()
@@ -205,7 +211,12 @@ class GetHybridSuggestionsUseCase @Inject constructor(
     private fun isCircuitBreakerOpen(): Boolean = System.currentTimeMillis() < cloudBlockedUntilMs
 
     private fun cacheKey(context: ConversationContext): String {
-        return "${context.appPackage}:${context.sender}:${context.latestMessage.hashCode()}"
+        val historyFingerprint = context.recentTurns
+            .joinToString(separator = "|") { "${it.direction}:${it.text}" }
+            .hashCode()
+        val styleFingerprint = context.adaptiveProfile.compactPromptLine.hashCode()
+        val planId = usageManager.activePlanId()
+        return "${context.appPackage}:${context.sender}:$planId:${context.latestMessage.hashCode()}:$historyFingerprint:${context.replyLength.maxChars}:$styleFingerprint"
     }
 
     private data class CacheEntry(
@@ -215,7 +226,6 @@ class GetHybridSuggestionsUseCase @Inject constructor(
 
     private companion object {
         const val minOnDeviceSuggestionCount = 2
-        const val maxSuggestionChars = 90
         const val minConfidenceThreshold = 0.55
         const val cloudTimeoutMs = 7_000L
         const val cacheTtlMs = 10 * 60 * 1_000L

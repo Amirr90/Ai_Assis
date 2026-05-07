@@ -2,8 +2,8 @@ package com.example.ai_assis.domain.model
 
 data class AppBehaviorPolicy(
     val appPackage: String,
-    val defaultTone: ReplyTone,
     val defaultLength: ReplyLength,
+    val defaultMemoryDepth: MemoryDepth = MemoryDepth.BALANCED,
     val preferQuickReactionsForMedia: Boolean = true,
 )
 
@@ -11,13 +11,13 @@ object AppBehaviorPolicies {
     private val defaults = listOf(
         AppBehaviorPolicy(
             appPackage = "com.whatsapp",
-            defaultTone = ReplyTone.CASUAL,
             defaultLength = ReplyLength.MEDIUM,
+            defaultMemoryDepth = MemoryDepth.BALANCED,
         ),
         AppBehaviorPolicy(
             appPackage = "com.instagram.android",
-            defaultTone = ReplyTone.FUNNY,
             defaultLength = ReplyLength.SHORT,
+            defaultMemoryDepth = MemoryDepth.LIGHT,
         ),
     )
 

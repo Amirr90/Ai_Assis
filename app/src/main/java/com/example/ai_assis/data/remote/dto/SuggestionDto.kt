@@ -27,6 +27,10 @@ data class PromptPolicyDto(
         "Match language/script of the incoming chat message.",
         "Do not include markdown, numbering, or fabricated facts.",
     ),
+    val adaptiveCompactLine: String = "",
+    val conversationSummary: String = "",
+    val continuityAnchors: List<String> = emptyList(),
+    val maxCharsPerReply: Int = 120,
 )
 
 @Serializable

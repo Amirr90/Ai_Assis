@@ -119,6 +119,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore)
     implementation(libs.firebase.auth)
+    implementation("com.google.firebase:firebase-messaging-ktx")
     implementation("com.google.firebase:firebase-functions-ktx")
     implementation("com.razorpay:checkout:1.6.41")
     implementation(libs.play.services.basement)

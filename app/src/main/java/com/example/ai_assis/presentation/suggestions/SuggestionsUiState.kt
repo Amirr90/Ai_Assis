@@ -1,11 +1,8 @@
 package com.example.ai_assis.presentation.suggestions
 
-import com.example.ai_assis.domain.model.SuggestionTone
-
 data class SuggestionsUiState(
     val latestMessage: String = "",
     val senderName: String = "",
-    val tone: SuggestionTone = SuggestionTone.CASUAL,
     val suggestions: List<SuggestionUiModel> = emptyList(),
     val mediaTypeLabel: String? = null,
     val isLoading: Boolean = false,

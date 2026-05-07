@@ -76,10 +76,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.example.ai_assis.R
+import com.example.ai_assis.data.remote.model.PlanIds
+import com.example.ai_assis.domain.model.LanguagePreference
+import com.example.ai_assis.domain.model.MemoryDepth
 import com.example.ai_assis.domain.model.ReplyLength
-import com.example.ai_assis.domain.model.ReplyTone
 import com.example.ai_assis.domain.model.appDisplayLabelFor
 import com.example.ai_assis.presentation.ui.components.DailyLimitPricingCallout
+import com.example.ai_assis.presentation.ui.components.HomeActivePlanCard
 import com.example.ai_assis.presentation.ui.components.HomeProUpgradePromoCard
 import com.example.ai_assis.presentation.ui.components.AppSourceIcon
 import com.example.ai_assis.presentation.ui.components.SourceTab
@@ -128,11 +131,27 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
-    val selectedTone = uiState.selectedTone
+    val adaptiveRepliesEnabled = uiState.adaptiveRepliesEnabled
+    val memoryDepth = uiState.memoryDepth
+    val languagePreference = uiState.languagePreference
+    val rememberContext = uiState.rememberContext
     val selectedLength = uiState.replyLength
     val aiEnabled = uiState.aiEnabled
     val chatHistory = uiState.chatHistory
     val overlayMeta = uiState.overlayMeta
+    val usageRecord = uiState.userUsageRecord
+    val hasPaidPlan = usageRecord.resolvedPlanId() != PlanIds.FREE
+    val activePlanTitle = when (usageRecord.resolvedPlanId()) {
+        PlanIds.MONTHLY -> stringResource(R.string.pricing_plan_monthly_title)
+        PlanIds.YEARLY -> stringResource(R.string.pricing_plan_yearly_title)
+        PlanIds.CREDITS -> stringResource(R.string.pricing_plan_credits_title)
+        else -> stringResource(R.string.pricing_plan_free_title)
+    }
+    val activePlanSubtitle = if (usageRecord.resolvedPlanId() == PlanIds.CREDITS) {
+        stringResource(R.string.pro_active_subtitle_credits, usageRecord.creditsRemaining)
+    } else {
+        stringResource(R.string.pro_active_subtitle_paid)
+    }
     var templateInput by rememberSaveable { mutableStateOf("") }
     val voiceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
@@ -188,6 +207,9 @@ fun HomeScreen(
                 onOpenSuggestions = onOpenSuggestions,
                 onOpenImeSettings = onOpenImeSettings,
                 onOpenProUpgrade = onOpenProUpgrade,
+                hasPaidPlan = hasPaidPlan,
+                activePlanTitle = activePlanTitle,
+                activePlanSubtitle = activePlanSubtitle,
             )
 
             DashboardTab.Activity -> HomeActivityTab(
@@ -200,12 +222,19 @@ fun HomeScreen(
                 viewModel = viewModel,
                 context = context,
                 onOpenProUpgrade = onOpenProUpgrade,
+                hasPaidPlan = hasPaidPlan,
             )
 
             DashboardTab.Settings -> HomeSettingsTab(
                 modifier = tabModifier,
-                selectedTone = selectedTone,
-                onToneSelected = { viewModel.onEvent(DashboardEvent.ToneSelected(it)) },
+                adaptiveRepliesEnabled = adaptiveRepliesEnabled,
+                onAdaptiveToggle = { viewModel.onEvent(DashboardEvent.AdaptiveRepliesToggled(it)) },
+                memoryDepth = memoryDepth,
+                onMemoryDepthSelect = { viewModel.onEvent(DashboardEvent.MemoryDepthSelected(it)) },
+                languagePreference = languagePreference,
+                onLanguagePreferenceSelect = { viewModel.onEvent(DashboardEvent.LanguagePreferenceSelected(it)) },
+                rememberContext = rememberContext,
+                onRememberContextToggle = { viewModel.onEvent(DashboardEvent.RememberContextToggled(it)) },
                 aiEnabled = aiEnabled,
                 selectedLength = selectedLength,
                 onAiToggle = { viewModel.onEvent(DashboardEvent.AiToggled(it)) },
@@ -244,6 +273,9 @@ private fun HomeOverviewTab(
     onOpenSuggestions: () -> Unit,
     onOpenImeSettings: () -> Unit,
     onOpenProUpgrade: () -> Unit,
+    hasPaidPlan: Boolean,
+    activePlanTitle: String,
+    activePlanSubtitle: String,
 ) {
     LazyColumn(
         modifier = modifier,
@@ -251,7 +283,15 @@ private fun HomeOverviewTab(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            HomeProUpgradePromoCard(onOpenProUpgrade = onOpenProUpgrade)
+            if (hasPaidPlan) {
+                HomeActivePlanCard(
+                    planTitle = activePlanTitle,
+                    subtitle = activePlanSubtitle,
+                    onManagePlan = onOpenProUpgrade,
+                )
+            } else {
+                HomeProUpgradePromoCard(onOpenProUpgrade = onOpenProUpgrade)
+            }
         }
         item {
             AssistantStatusCard(
@@ -308,6 +348,7 @@ private fun HomeActivityTab(
     viewModel: HomeViewModel,
     context: Context,
     onOpenProUpgrade: () -> Unit,
+    hasPaidPlan: Boolean,
 ) {
     LazyColumn(
         modifier = modifier,
@@ -371,7 +412,10 @@ private fun HomeActivityTab(
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
                         if (overlayMeta.errorKind == NotificationEventBus.ErrorKind.DAILY_AI_LIMIT) {
-                            DailyLimitPricingCallout(onUpgrade = onOpenProUpgrade)
+                            DailyLimitPricingCallout(
+                                onUpgrade = onOpenProUpgrade,
+                                canUpgrade = !hasPaidPlan,
+                            )
                         } else {
                             Text(
                                 text = stringResource(R.string.dashboard_retry_last_request),
@@ -413,8 +457,14 @@ private fun HomeActivityTab(
 @Composable
 private fun HomeSettingsTab(
     modifier: Modifier,
-    selectedTone: ReplyTone,
-    onToneSelected: (ReplyTone) -> Unit,
+    adaptiveRepliesEnabled: Boolean,
+    onAdaptiveToggle: (Boolean) -> Unit,
+    memoryDepth: MemoryDepth,
+    onMemoryDepthSelect: (MemoryDepth) -> Unit,
+    languagePreference: LanguagePreference,
+    onLanguagePreferenceSelect: (LanguagePreference) -> Unit,
+    rememberContext: Boolean,
+    onRememberContextToggle: (Boolean) -> Unit,
     aiEnabled: Boolean,
     selectedLength: ReplyLength,
     onAiToggle: (Boolean) -> Unit,
@@ -433,7 +483,16 @@ private fun HomeSettingsTab(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            ToneSelectorCard(selectedTone = selectedTone, onToneSelected = onToneSelected)
+            AdaptivePersonalizationCard(
+                adaptiveRepliesEnabled = adaptiveRepliesEnabled,
+                onAdaptiveToggle = onAdaptiveToggle,
+                memoryDepth = memoryDepth,
+                onMemoryDepthSelect = onMemoryDepthSelect,
+                languagePreference = languagePreference,
+                onLanguagePreferenceSelect = onLanguagePreferenceSelect,
+                rememberContext = rememberContext,
+                onRememberContextToggle = onRememberContextToggle,
+            )
         }
         item {
             ReplyBehaviorCard(
@@ -470,7 +529,6 @@ private fun HomeSettingsTab(
                     )
                     DashboardBacklogLine(stringResource(R.string.dashboard_feature_voice_input))
                     DashboardBacklogLine(stringResource(R.string.dashboard_feature_summarization))
-                    DashboardBacklogLine(stringResource(R.string.dashboard_feature_personalization))
                     DashboardBacklogLine(stringResource(R.string.dashboard_feature_reply_later))
                     DashboardBacklogLine(stringResource(R.string.dashboard_feature_notification_actions))
                     DashboardBacklogLine(stringResource(R.string.dashboard_feature_widget))
@@ -746,27 +804,52 @@ private fun PermissionStatusRow(label: String, isGranted: Boolean, onFix: () -> 
 }
 
 @Composable
-private fun ToneSelectorCard(selectedTone: ReplyTone, onToneSelected: (ReplyTone) -> Unit) {
+private fun AdaptivePersonalizationCard(
+    adaptiveRepliesEnabled: Boolean,
+    onAdaptiveToggle: (Boolean) -> Unit,
+    memoryDepth: MemoryDepth,
+    onMemoryDepthSelect: (MemoryDepth) -> Unit,
+    languagePreference: LanguagePreference,
+    onLanguagePreferenceSelect: (LanguagePreference) -> Unit,
+    rememberContext: Boolean,
+    onRememberContextToggle: (Boolean) -> Unit,
+) {
     Card(
         shape = DashboardCardShape,
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                stringResource(R.string.dashboard_reply_tone),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                ReplyTone.entries.forEach { tone ->
-                    val isSelected = tone == selectedTone
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.dashboard_adaptive_replies),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        stringResource(R.string.dashboard_adaptive_replies_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = adaptiveRepliesEnabled, onCheckedChange = onAdaptiveToggle)
+            }
+            Text(
+                stringResource(R.string.dashboard_memory_depth),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MemoryDepth.entries.forEach { depth ->
+                    val selected = depth == memoryDepth
                     OutlinedButton(
-                        onClick = { onToneSelected(tone) },
-                        colors = if (isSelected) {
+                        onClick = { onMemoryDepthSelect(depth) },
+                        colors = if (selected) {
                             ButtonDefaults.outlinedButtonColors(
                                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -776,16 +859,52 @@ private fun ToneSelectorCard(selectedTone: ReplyTone, onToneSelected: (ReplyTone
                         },
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                     ) {
-                        Text(
-                            text = if (isSelected) {
-                                stringResource(R.string.dashboard_tone_selected, tone.displayName)
-                            } else {
-                                tone.displayName
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        Text(depth.displayName, style = MaterialTheme.typography.bodySmall)
                     }
                 }
+            }
+            Text(
+                stringResource(R.string.dashboard_language_preference),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LanguagePreference.entries.forEach { pref ->
+                    val selected = pref == languagePreference
+                    OutlinedButton(
+                        onClick = { onLanguagePreferenceSelect(pref) },
+                        colors = if (selected) {
+                            ButtonDefaults.outlinedButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        } else {
+                            ButtonDefaults.outlinedButtonColors()
+                        },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(pref.displayName, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.dashboard_remember_context),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        stringResource(R.string.dashboard_remember_context_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = rememberContext, onCheckedChange = onRememberContextToggle)
             }
         }
     }

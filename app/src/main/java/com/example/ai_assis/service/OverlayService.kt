@@ -38,17 +38,14 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.ai_assis.MainActivity
 import com.example.ai_assis.R
-import com.example.ai_assis.data.local.ConversationCacheDataSource
+import com.example.ai_assis.data.local.UsageManager
 import com.example.ai_assis.domain.DailyAiLimitReachedException
-import com.example.ai_assis.data.local.SenderStyleMemoryDataSource
 import com.example.ai_assis.domain.model.MessageDirection
-import com.example.ai_assis.domain.repository.FeaturePreferencesRepository
-import com.example.ai_assis.domain.repository.SmartSuggestionRepository
-import com.example.ai_assis.domain.usecase.BuildConversationContextUseCase
-import com.example.ai_assis.domain.usecase.BuildContextMemoryUseCase
 import com.example.ai_assis.domain.usecase.GetHybridSuggestionsUseCase
-import com.example.ai_assis.domain.usecase.ResolveReplyPolicyUseCase
+import com.example.ai_assis.domain.usecase.PrepareAdaptiveConversationContextUseCase
+import com.example.ai_assis.notifications.EngagementNotificationCoordinator
 import com.example.ai_assis.domain.model.ChatMessage
+import com.example.ai_assis.data.remote.model.PlanIds
 import com.example.ai_assis.presentation.ui.overlay.BubbleHeadOverlayContent
 import com.example.ai_assis.presentation.ui.overlay.BubblePanelOverlayContent
 import com.example.ai_assis.presentation.ui.overlay.OverlayUiState
@@ -62,7 +59,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import javax.inject.Inject
@@ -72,28 +68,16 @@ import androidx.core.content.edit
 class OverlayService : android.app.Service() {
 
     @Inject
-    lateinit var smartSuggestionRepository: SmartSuggestionRepository
-
-    @Inject
-    lateinit var conversationCacheDataSource: ConversationCacheDataSource
-
-    @Inject
-    lateinit var senderStyleMemoryDataSource: SenderStyleMemoryDataSource
-
-    @Inject
-    lateinit var buildConversationContextUseCase: BuildConversationContextUseCase
-
-    @Inject
     lateinit var getHybridSuggestionsUseCase: GetHybridSuggestionsUseCase
 
     @Inject
-    lateinit var featurePreferencesRepository: FeaturePreferencesRepository
+    lateinit var prepareAdaptiveConversationContextUseCase: PrepareAdaptiveConversationContextUseCase
 
     @Inject
-    lateinit var resolveReplyPolicyUseCase: ResolveReplyPolicyUseCase
+    lateinit var usageManager: UsageManager
 
     @Inject
-    lateinit var buildContextMemoryUseCase: BuildContextMemoryUseCase
+    lateinit var engagementNotificationCoordinator: EngagementNotificationCoordinator
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var windowManager: WindowManager
@@ -198,28 +182,13 @@ class OverlayService : android.app.Service() {
                 NotificationEventBus.setLoading(true)
                 runCatching {
                     Log.d(logTag, "Suggestion fetch stage=request_context requestId=$requestId")
-                    conversationCacheDataSource.appendMessage(event)
-                    val tone = smartSuggestionRepository.observeTone().first()
-                    val aiEnabled = featurePreferencesRepository.aiEnabledFlow.first()
-                    val globalLength = featurePreferencesRepository.replyLengthFlow.first()
-                    val effectiveTone = resolveReplyPolicyUseCase.resolveTone(event.appSource, tone.toReplyTone())
-                    val effectiveLength = resolveReplyPolicyUseCase.resolveLength(event.appSource, globalLength)
-                    senderStyleMemoryDataSource.rememberStyle(event.appSource, event.sender, tone)
-                    val recentMessages = conversationCacheDataSource.recentMessages(event.appSource, event.sender)
-                    val contextMemory = buildContextMemoryUseCase(event, recentMessages)
-                    val styleHint = senderStyleMemoryDataSource.getStyleHint(event.appSource, event.sender)
+                    val context = prepareAdaptiveConversationContextUseCase(
+                        message = event,
+                        highQualityMode = true,
+                    )
                     Log.d(
                         logTag,
-                        "Suggestion fetch stage=context_ready requestId=$requestId tone=$tone recentCount=${recentMessages.size} hasStyleHint=${!styleHint.isNullOrBlank()}",
-                    )
-                    val context = buildConversationContextUseCase(
-                        message = event,
-                        tone = effectiveTone.toSuggestionTone(),
-                        recentMessages = contextMemory,
-                        styleHint = styleHint,
-                        highQualityMode = true,
-                        replyLength = effectiveLength,
-                        aiEnabled = aiEnabled,
+                        "Suggestion fetch stage=context_ready requestId=$requestId recentCount=${context.recentTurns.size}",
                     )
                     Log.d(logTag, "Suggestion fetch stage=hybrid_invoke requestId=$requestId")
                     getHybridSuggestionsUseCase(context).getOrThrow()
@@ -259,6 +228,11 @@ class OverlayService : android.app.Service() {
                         return@onFailure
                     }
                     NotificationEventBus.recordFailure(event)
+                    if (throwable is DailyAiLimitReachedException) {
+                        serviceScope.launch {
+                            engagementNotificationCoordinator.onFreeQuotaBlocked()
+                        }
+                    }
                     val errorMsg = userFriendlyError(throwable)
                     val errorKind = if (throwable is DailyAiLimitReachedException) {
                         NotificationEventBus.ErrorKind.DAILY_AI_LIMIT
@@ -355,6 +329,7 @@ class OverlayService : android.app.Service() {
                 AI_AssisTheme {
                     val meta by NotificationEventBus.metaState.collectAsState()
                     val items by NotificationEventBus.chatHistory.collectAsState()
+                    val userRecord by usageManager.userRecord.collectAsState()
                     BubblePanelOverlayContent(
                         uiState = OverlayUiState(
                             mode = meta.mode,
@@ -367,6 +342,7 @@ class OverlayService : android.app.Service() {
                             bubbleAnchorXPx = meta.bubbleAnchorXPx,
                             bubbleAnchorYPx = meta.bubbleAnchorYPx,
                             items = items,
+                            canUpgrade = userRecord.resolvedPlanId() == PlanIds.FREE,
                         ),
                         onCollapse = {
                             NotificationEventBus.setMode(NotificationEventBus.OverlayMode.HEAD)
@@ -380,7 +356,12 @@ class OverlayService : android.app.Service() {
                         onToggleUpdates = { NotificationEventBus.togglePaused() },
                         onReplyClick = ::copyToClipboard,
                         onDirectSend = ::sendDirectReply,
-                        onRegenerateSuggestion = { message -> NotificationEventBus.regenerateForMessage(message) },
+                        onRegenerateSuggestion = { message ->
+                            serviceScope.launch {
+                                engagementNotificationCoordinator.recordRegenerateTap()
+                            }
+                            NotificationEventBus.regenerateForMessage(message)
+                        },
                         onRetry = { NotificationEventBus.retryLastFailedRequest() },
                         onOpenProUpgrade = ::openMainActivityForProUpgrade,
                     )
@@ -624,6 +605,17 @@ class OverlayService : android.app.Service() {
                 packageName = chatMessage.appSource,
                 text = text,
             )
+            serviceScope.launch {
+                prepareAdaptiveConversationContextUseCase.recordOutgoingReply(
+                    ChatMessage(
+                        sender = chatMessage.sender,
+                        message = text,
+                        appSource = chatMessage.appSource,
+                        messageType = chatMessage.messageType,
+                        direction = MessageDirection.OUTGOING_SELF,
+                    ),
+                )
+            }
             Toast.makeText(this, getString(R.string.dashboard_reply_sent), Toast.LENGTH_SHORT).show()
         } catch (e: PendingIntent.CanceledException) {
             Log.e(logTag, "Direct reply failed, falling back to clipboard", e)
@@ -698,26 +690,6 @@ class OverlayService : android.app.Service() {
             }
             return super.dispatchTouchEvent(ev)
         }
-    }
-}
-
-private fun com.example.ai_assis.domain.model.ReplyTone.toSuggestionTone(): com.example.ai_assis.domain.model.SuggestionTone {
-    return when (this) {
-        com.example.ai_assis.domain.model.ReplyTone.CASUAL -> com.example.ai_assis.domain.model.SuggestionTone.CASUAL
-        com.example.ai_assis.domain.model.ReplyTone.PROFESSIONAL -> com.example.ai_assis.domain.model.SuggestionTone.PROFESSIONAL
-        com.example.ai_assis.domain.model.ReplyTone.FLIRTY -> com.example.ai_assis.domain.model.SuggestionTone.CASUAL
-        com.example.ai_assis.domain.model.ReplyTone.ANGRY -> com.example.ai_assis.domain.model.SuggestionTone.PROFESSIONAL
-        com.example.ai_assis.domain.model.ReplyTone.FUNNY -> com.example.ai_assis.domain.model.SuggestionTone.HUMOROUS
-        com.example.ai_assis.domain.model.ReplyTone.SHORT -> com.example.ai_assis.domain.model.SuggestionTone.SHORT
-    }
-}
-
-private fun com.example.ai_assis.domain.model.SuggestionTone.toReplyTone(): com.example.ai_assis.domain.model.ReplyTone {
-    return when (this) {
-        com.example.ai_assis.domain.model.SuggestionTone.CASUAL -> com.example.ai_assis.domain.model.ReplyTone.CASUAL
-        com.example.ai_assis.domain.model.SuggestionTone.PROFESSIONAL -> com.example.ai_assis.domain.model.ReplyTone.PROFESSIONAL
-        com.example.ai_assis.domain.model.SuggestionTone.HUMOROUS -> com.example.ai_assis.domain.model.ReplyTone.FUNNY
-        com.example.ai_assis.domain.model.SuggestionTone.SHORT -> com.example.ai_assis.domain.model.ReplyTone.SHORT
     }
 }
 

@@ -6,8 +6,9 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.ai_assis.domain.model.CustomTemplate
+import com.example.ai_assis.domain.model.LanguagePreference
+import com.example.ai_assis.domain.model.MemoryDepth
 import com.example.ai_assis.domain.model.ReplyLength
-import com.example.ai_assis.domain.model.ReplyTone
 import com.example.ai_assis.domain.repository.FeaturePreferencesRepository
 import com.example.ai_assis.domain.repository.TemplateRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -36,6 +37,24 @@ class FeaturePreferencesDataStore @Inject constructor(
         prefs[replyLengthKey]?.let { raw -> ReplyLength.entries.firstOrNull { it.name == raw } } ?: ReplyLength.MEDIUM
     }
 
+    override val adaptiveRepliesFlow: Flow<Boolean> = context.featureDataStore.data.map { prefs ->
+        prefs[adaptiveRepliesKey] ?: true
+    }
+
+    override val memoryDepthFlow: Flow<MemoryDepth> = context.featureDataStore.data.map { prefs ->
+        prefs[memoryDepthKey]?.let { raw -> MemoryDepth.entries.firstOrNull { it.name == raw } }
+            ?: MemoryDepth.BALANCED
+    }
+
+    override val languagePreferenceFlow: Flow<LanguagePreference> = context.featureDataStore.data.map { prefs ->
+        prefs[languagePreferenceKey]?.let { raw -> LanguagePreference.entries.firstOrNull { it.name == raw } }
+            ?: LanguagePreference.AUTO
+    }
+
+    override val rememberContextFlow: Flow<Boolean> = context.featureDataStore.data.map { prefs ->
+        prefs[rememberContextKey] ?: true
+    }
+
     override val templatesFlow: Flow<List<CustomTemplate>> = context.featureDataStore.data.map { prefs ->
         decodeTemplates(prefs[templatesKey])
     }
@@ -48,16 +67,20 @@ class FeaturePreferencesDataStore @Inject constructor(
         context.featureDataStore.edit { prefs -> prefs[replyLengthKey] = length.name }
     }
 
-    override suspend fun setAppToneOverride(appPackage: String, tone: ReplyTone?) {
-        updateOverrides { current ->
-            current.copy(
-                toneOverrides = current.toneOverrides
-                    .toMutableMap()
-                    .apply {
-                        if (tone == null) remove(appPackage) else put(appPackage, tone.name)
-                    },
-            )
-        }
+    override suspend fun setAdaptiveRepliesEnabled(enabled: Boolean) {
+        context.featureDataStore.edit { prefs -> prefs[adaptiveRepliesKey] = enabled }
+    }
+
+    override suspend fun setMemoryDepth(depth: MemoryDepth) {
+        context.featureDataStore.edit { prefs -> prefs[memoryDepthKey] = depth.name }
+    }
+
+    override suspend fun setLanguagePreference(preference: LanguagePreference) {
+        context.featureDataStore.edit { prefs -> prefs[languagePreferenceKey] = preference.name }
+    }
+
+    override suspend fun setRememberContext(enabled: Boolean) {
+        context.featureDataStore.edit { prefs -> prefs[rememberContextKey] = enabled }
     }
 
     override suspend fun setAppLengthOverride(appPackage: String, length: ReplyLength?) {
@@ -72,14 +95,28 @@ class FeaturePreferencesDataStore @Inject constructor(
         }
     }
 
-    override suspend fun getAppToneOverride(appPackage: String): ReplyTone? {
-        val overrides = loadOverrides()
-        return overrides.toneOverrides[appPackage]?.let { raw -> ReplyTone.entries.firstOrNull { it.name == raw } }
-    }
-
     override suspend fun getAppLengthOverride(appPackage: String): ReplyLength? {
         val overrides = loadOverrides()
         return overrides.lengthOverrides[appPackage]?.let { raw -> ReplyLength.entries.firstOrNull { it.name == raw } }
+    }
+
+    override suspend fun setAppMemoryDepthOverride(appPackage: String, depth: MemoryDepth?) {
+        updateOverrides { current ->
+            current.copy(
+                memoryDepthOverrides = current.memoryDepthOverrides
+                    .toMutableMap()
+                    .apply {
+                        if (depth == null) remove(appPackage) else put(appPackage, depth.name)
+                    },
+            )
+        }
+    }
+
+    override suspend fun getAppMemoryDepthOverride(appPackage: String): MemoryDepth? {
+        val overrides = loadOverrides()
+        return overrides.memoryDepthOverrides[appPackage]?.let { raw ->
+            MemoryDepth.entries.firstOrNull { it.name == raw }
+        }
     }
 
     override suspend fun saveTemplate(text: String, appPackage: String?) {
@@ -144,13 +181,19 @@ class FeaturePreferencesDataStore @Inject constructor(
 
     @Serializable
     private data class AppOverridePayload(
+        /** Legacy tone overrides ignored at runtime but kept for decode compatibility. */
         val toneOverrides: Map<String, String> = emptyMap(),
         val lengthOverrides: Map<String, String> = emptyMap(),
+        val memoryDepthOverrides: Map<String, String> = emptyMap(),
     )
 
     private companion object {
         val aiEnabledKey = booleanPreferencesKey("ai_enabled")
         val replyLengthKey = stringPreferencesKey("reply_length")
+        val adaptiveRepliesKey = booleanPreferencesKey("adaptive_replies_enabled")
+        val memoryDepthKey = stringPreferencesKey("memory_depth")
+        val languagePreferenceKey = stringPreferencesKey("language_preference")
+        val rememberContextKey = booleanPreferencesKey("remember_context_enabled")
         val appOverridesKey = stringPreferencesKey("app_overrides")
         val templatesKey = stringPreferencesKey("custom_templates")
         val json = Json { ignoreUnknownKeys = true }

@@ -120,6 +120,7 @@ data class OverlayUiState(
     val errorMessage: String? = null,
     val errorKind: NotificationEventBus.ErrorKind = NotificationEventBus.ErrorKind.NONE,
     val isBubbleVisible: Boolean = false,
+    val canUpgrade: Boolean = true,
     /** Last known chat-head top-left in screen px (from overlay service); used as expand pivot for PANEL. */
     val bubbleAnchorXPx: Int = 0,
     val bubbleAnchorYPx: Int = 0,
@@ -242,6 +243,7 @@ fun BubblePanelOverlayContent(
             ) {
                 ExpandedChatPanel(
                     items = uiState.items,
+                    canUpgrade = uiState.canUpgrade,
                     updatesPaused = uiState.updatesPaused,
                     isLoading = uiState.isLoading,
                     errorMessage = uiState.errorMessage,
@@ -359,6 +361,7 @@ private fun ChatHeadBubble(
 @Composable
 private fun ExpandedChatPanel(
     items: List<NotificationEventBus.ChatSuggestionItem>,
+    canUpgrade: Boolean,
     updatesPaused: Boolean,
     isLoading: Boolean,
     errorMessage: String?,
@@ -454,7 +457,10 @@ private fun ExpandedChatPanel(
             // to avoid duplicate Upgrade CTAs stacked in the panel.
             val showProTeaser = errorKind != NotificationEventBus.ErrorKind.DAILY_AI_LIMIT
             if (showProTeaser) {
-                OverlayProPricingTeaser(onOpenProUpgrade = onOpenProUpgrade)
+                OverlayProPricingTeaser(
+                    onOpenProUpgrade = onOpenProUpgrade,
+                    canUpgrade = canUpgrade,
+                )
             }
 
             if (isLoading) {
@@ -495,6 +501,7 @@ private fun ExpandedChatPanel(
                     if (errorKind == NotificationEventBus.ErrorKind.DAILY_AI_LIMIT) {
                         DailyLimitPricingCallout(
                             onUpgrade = onOpenProUpgrade,
+                            canUpgrade = canUpgrade,
                         )
                     } else {
                         Text(

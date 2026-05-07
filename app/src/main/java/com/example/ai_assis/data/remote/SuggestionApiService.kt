@@ -27,9 +27,10 @@ class SuggestionApiService @Inject constructor(
 
     suspend fun generateSuggestions(request: SuggestionGenerateRequestDto): SuggestionGenerateResponseDto {
         Log.d(logTag, "Gemini request start. hasApiKey=${BuildConfig.GEMINI_BACKEND_API_KEY.isNotBlank()}")
+        val maxChars = request.promptPolicy.maxCharsPerReply.coerceIn(40, 400)
         val prompt = buildPrompt(request)
         val primaryResponse = callGemini(prompt)
-        var parsed = extractSuggestions(primaryResponse)
+        var parsed = extractSuggestions(primaryResponse, maxChars)
         Log.d(
             logTag,
             "Gemini primary parsed count=${parsed.size} finishReasons=${primaryResponse.candidates.map { it.finishReason }}",
@@ -38,7 +39,7 @@ class SuggestionApiService @Inject constructor(
         if (parsed.isEmpty()) {
             val retryPrompt = buildRetryPrompt(request)
             val retryResponse = callGemini(retryPrompt)
-            parsed = extractSuggestions(retryResponse)
+            parsed = extractSuggestions(retryResponse, maxChars)
             Log.d(
                 logTag,
                 "Gemini retry parsed count=${parsed.size} finishReasons=${retryResponse.candidates.map { it.finishReason }}",
@@ -110,44 +111,64 @@ class SuggestionApiService @Inject constructor(
     }
 
     private fun buildPrompt(request: SuggestionGenerateRequestDto): String {
+        val pp = request.promptPolicy
+        val maxChars = pp.maxCharsPerReply.coerceIn(40, 400)
         return buildString {
-            appendLine("Generate exactly 3 short smart replies.")
-            appendLine("Tone: ${request.tone}")
-            appendLine("Sender: ${request.sender}")
+            appendLine("You are generating realistic WhatsApp replies.")
+            appendLine()
+            appendLine(pp.instruction)
+            appendLine()
+            appendLine("Policy rules:")
+            pp.rules.forEach { appendLine("- $it") }
+            appendLine()
+            appendLine("Mode: ${request.tone}")
+            appendLine("Chat with: ${request.sender}")
             appendLine("Latest message: ${request.latestMessage}")
-            if (request.compiledConversationContext.isNotBlank()) {
-                appendLine("Conversation context:")
-                appendLine(request.compiledConversationContext)
-            }
-            if (request.recentMessages.isNotEmpty()) {
-                appendLine("Recent messages:")
-                request.recentMessages.takeLast(8).forEach { appendLine("- $it") }
-            }
             if (!request.languageHint.isNullOrBlank()) {
                 appendLine("Language hint: ${request.languageHint}")
             }
-            request.promptPolicy.rules.forEach { appendLine("Rule: $it") }
+            if (pp.conversationSummary.isNotBlank()) {
+                appendLine("Rolling summary: ${pp.conversationSummary}")
+            }
+            if (pp.continuityAnchors.isNotEmpty()) {
+                appendLine("Continuity: ${pp.continuityAnchors.joinToString(", ")}")
+            }
+            appendLine()
+            appendLine("Conversation history:")
+            appendLine(request.compiledConversationContext.ifBlank { "Friend: ${request.latestMessage}" })
+            appendLine()
             appendLine("Output requirements:")
             appendLine("- Return plain text only.")
-            appendLine("- One reply per line.")
-            append("- Each reply <= 90 characters.")
+            appendLine("- Exactly 3 replies.")
+            append("- One reply per line, each <= $maxChars characters.")
         }
     }
 
     private fun buildRetryPrompt(request: SuggestionGenerateRequestDto): String {
+        val maxChars = request.promptPolicy.maxCharsPerReply.coerceIn(40, 400)
+        val pp = request.promptPolicy
         return buildString {
+            appendLine(pp.instruction)
             appendLine("Reply strictly with 3 lines only.")
             appendLine("No JSON, no markdown, no bullets.")
-            appendLine("Each line is one smart reply under 90 characters.")
-            appendLine("Use same language/script as the message.")
+            appendLine("Each line is one smart reply under $maxChars characters.")
+            appendLine("Use same language/script as the thread.")
+            appendLine("Follow adaptive style: ${pp.adaptiveCompactLine}")
+            if (pp.conversationSummary.isNotBlank()) {
+                appendLine("Summary: ${pp.conversationSummary}")
+            }
+            if (pp.continuityAnchors.isNotEmpty()) {
+                appendLine("Continuity anchors: ${pp.continuityAnchors.joinToString(", ")}")
+            }
             appendLine("Message: ${request.latestMessage}")
             if (request.compiledConversationContext.isNotBlank()) {
-                appendLine("Context: ${request.compiledConversationContext}")
+                appendLine("Conversation history:")
+                appendLine(request.compiledConversationContext)
             }
         }
     }
 
-    private fun extractSuggestions(response: GeminiGenerateResponseDto): List<String> {
+    private fun extractSuggestions(response: GeminiGenerateResponseDto, maxChars: Int): List<String> {
         val rawText = response.candidates
             .flatMap { it.content.parts }
             .mapNotNull { it.text }
@@ -160,7 +181,7 @@ class SuggestionApiService @Inject constructor(
         val jsonReplies = parseJsonReplies(rawText)
         if (jsonReplies.isNotEmpty()) {
             return jsonReplies
-                .map { it.take(90) }
+                .map { it.take(maxChars) }
                 .take(3)
         }
 
@@ -171,7 +192,7 @@ class SuggestionApiService @Inject constructor(
             .map { it.removePrefix("-").trim().replace(Regex("^\\d+[.)]\\s*"), "") }
             .filter { it.isNotBlank() }
             .distinct()
-            .map { it.take(90) }
+            .map { it.take(maxChars) }
             .take(3)
             .toList()
 
@@ -181,7 +202,7 @@ class SuggestionApiService @Inject constructor(
             .split(Regex("[.!?]\\s+"))
             .map { it.trim() }
             .filter { it.isNotBlank() }
-            .map { it.take(90) }
+            .map { it.take(maxChars) }
             .distinct()
             .take(3)
     }

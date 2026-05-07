@@ -1,0 +1,35 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Android Studio
+.idea/
+*.iml
+
+# Generated
+generated/
+captures/
+outputs/
+
+# Kotlin / KSP / Hilt
+.ksp/
+tmp/
+
+# Logs
+*.log
+
+# APK/AAB
+*.apk
+*.aab
+
+# Local config
+local.properties
+
+# Node (if hybrid project)
+node_modules/
+dist/
+coverage/
+
+# Git
+.git/

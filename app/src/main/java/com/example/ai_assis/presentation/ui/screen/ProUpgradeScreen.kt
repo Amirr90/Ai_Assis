@@ -16,7 +16,7 @@ import com.example.ai_assis.ui.theme.AI_AssisTheme
 
 @Composable
 fun ProUpgradeScreen(
-    onUpgrade: () -> Unit,
+    onUpgrade: (planId: String, amountPaise: Long, currency: String, creditsToAdd: Int, orderId: String, paymentId: String) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -29,7 +29,8 @@ fun ProUpgradeScreen(
         Box(modifier = Modifier.weight(1f)) {
             PricingScreen(
                 modifier = Modifier.fillMaxSize(),
-                onContinueOrUpgrade = onUpgrade,
+                onContinueOrUpgrade = onDismiss,
+                onUpgradeSuccess = onUpgrade,
             )
         }
         TextButton(onClick = onDismiss) {
@@ -46,6 +47,6 @@ fun ProUpgradeScreen(
 @Composable
 private fun ProUpgradeScreenPreview() {
     AI_AssisTheme {
-        ProUpgradeScreen(onUpgrade = {}, onDismiss = {})
+        ProUpgradeScreen(onUpgrade = { _, _, _, _, _, _ -> }, onDismiss = {})
     }
 }
